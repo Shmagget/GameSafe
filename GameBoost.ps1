@@ -126,6 +126,35 @@ $Script:ProtectNames = @(
     'SteamService'
 ) | ForEach-Object { $_.ToLowerInvariant() }
 
+# The hard "NEVER kill" set for Deep Scan. Anything here is treated as essential
+# and is excluded from the scan results entirely: Windows core/shell, security,
+# GPU/audio drivers, anti-cheat, and the game LAUNCHERS (killing a launcher can
+# close or break the game). The game itself and Discord are handled separately.
+$Script:ScanProtect = @(
+    # Windows core / shell / UWP hosts
+    'system','idle','registry','smss','csrss','wininit','winlogon','services',
+    'lsass','fontdrvhost','dwm','explorer','sihost','ctfmon','conhost','taskhostw',
+    'runtimebroker','shellexperiencehost','startmenuexperiencehost','searchhost',
+    'searchapp','searchindexer','textinputhost','applicationframehost','dllhost',
+    'lockapp','logonui','useroobebroker','dashost','wmiprvse','svchost','spoolsv',
+    'dwminit','wudfhost','backgroundtaskhost','smartscreen',
+    # Security
+    'msmpeng','nissrv','securityhealthservice','securityhealthsystray',
+    # Audio / GPU / vendor drivers
+    'audiodg','rtkauduservice64','realtek','nvcontainer','nvdisplay.container',
+    'nvsphelper64','nvidia web helper','nvidia share','radeonsoftware','amdrsserv',
+    'amdrssrcext','atieclxx','atiesrxx','igfxext','igfxem','igfxhk',
+    # GameBoost itself / shells
+    'powershell','pwsh','powershell_ise','windowsterminal','cmd',
+    # Anti-cheat
+    'easyanticheat','easyanticheat_eos','beservice','beclient','vgc','vgtray','vgk',
+    'faceitclient','faceitservice',
+    # Game launchers / platforms (the game may need these running)
+    'steam','steamwebhelper','steamservice','epicgameslauncher','battle.net',
+    'galaxyclient','origin','eadesktop','eabackgroundservice','uplay','upc',
+    'riotclientservices','leagueclient','leagueclientux'
+) | ForEach-Object { $_.ToLowerInvariant() }
+
 $Script:HighPerfGuid = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
 $Script:UltimateGuid = 'e9a42b02-d5df-448d-aa00-03f14749eb61'
 $Script:MultimediaProfile = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
@@ -234,6 +263,58 @@ function Get-BloatSet([string]$level) {
     }
 }
 
+# ----------------------------------------------------------------------------
+# Deep Scan: sample live CPU% + RAM for every process in our session, drop all
+# essential ones (system, game, Discord-if-kept, anti-cheat, drivers, launchers)
+# and return the non-essential resource users, grouped by name, sorted by usage.
+# ----------------------------------------------------------------------------
+function Get-ScanCandidates($opts) {
+    $cores     = [Environment]::ProcessorCount
+    $mySession = (Get-Process -Id $PID).SessionId
+    $interval  = 0.6
+
+    # First CPU-time snapshot
+    $snap = @{}
+    foreach ($p in Get-Process) { try { $snap[$p.Id] = $p.CPU } catch { } }
+    Start-Sleep -Milliseconds ([int]($interval * 1000))
+
+    $rows = @{}
+    foreach ($p in Get-Process) {
+        if ($p.SessionId -ne $mySession) { continue }   # skip session-0 services
+        if ($p.Id -eq $PID) { continue }
+        $n  = $p.ProcessName
+        $nl = $n.ToLowerInvariant()
+        if ($Script:ScanProtect  -contains $nl) { continue }
+        if ($Script:ProtectNames -contains $nl) { continue }
+        if (Test-KeepProcess $n $opts) { continue }      # game + Discord(if kept)
+
+        $t1 = $snap[$p.Id]
+        $t2 = $null; try { $t2 = $p.CPU } catch { }
+        $cpu = 0.0
+        if ($null -ne $t1 -and $null -ne $t2) { $cpu = (($t2 - $t1) / $interval / $cores) * 100 }
+        if ($cpu -lt 0) { $cpu = 0 }
+        $ram = 0; try { $ram = $p.WorkingSet64 } catch { }
+
+        if (-not $rows.ContainsKey($nl)) {
+            $rows[$nl] = [pscustomobject]@{ Name = $n; Count = 0; Cpu = 0.0; RamBytes = [int64]0 }
+        }
+        $rows[$nl].Count++
+        $rows[$nl].Cpu      += $cpu
+        $rows[$nl].RamBytes += [int64]$ram
+    }
+
+    # Keep only ones that actually use resources; attach MB + preselect flag
+    $list = foreach ($r in $rows.Values) {
+        $mb = [math]::Round($r.RamBytes / 1MB)
+        if ($mb -lt 15 -and $r.Cpu -lt 0.5) { continue }   # hide trivia
+        $r | Add-Member -NotePropertyName RamMB -NotePropertyValue $mb -Force
+        $r | Add-Member -NotePropertyName CpuPct -NotePropertyValue ([math]::Round($r.Cpu,1)) -Force
+        $r | Add-Member -NotePropertyName Preselect -NotePropertyValue ($mb -ge 100 -or $r.Cpu -ge 1.0) -Force
+        $r
+    }
+    return @($list | Sort-Object -Property @{e='Cpu';Descending=$true}, @{e='RamBytes';Descending=$true})
+}
+
 # ============================================================================
 # ENABLE
 # ============================================================================
@@ -304,6 +385,24 @@ function Enable-GameBoost($opts) {
             }
         }
         Write-GBLog "Closed $killed background app process(es)"
+    }
+
+    # --- Scanned non-essential processes (from Deep Scan) ---
+    # Double-guarded: even if the queued list somehow contains something we
+    # protect, the checks below stop it from being killed.
+    if ($opts.ScanKill -and @($opts.ScanKill).Count -gt 0) {
+        $sk = 0
+        foreach ($name in $opts.ScanKill) {
+            $nl = ([string]$name).ToLowerInvariant()
+            if ($Script:ScanProtect -contains $nl) { continue }
+            if ($Script:ProtectNames -contains $nl) { continue }
+            foreach ($p in (Get-Process -Name $name -ErrorAction SilentlyContinue)) {
+                if ($p.Id -eq $PID) { continue }
+                if (Test-KeepProcess $p.ProcessName $opts) { continue }
+                try { Stop-Process -Id $p.Id -Force -ErrorAction Stop; $sk++ } catch { }
+            }
+        }
+        Write-GBLog "Deep Scan: closed $sk extra non-essential process(es)"
     }
 
     # --- Game DVR off ---
@@ -490,7 +589,7 @@ function Disable-GameBoost {
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="GameBoost" Height="792" Width="470"
+        Title="GameBoost" Height="864" Width="470"
         WindowStartupLocation="CenterScreen" Background="#0E1117" ResizeMode="CanMinimize">
   <Window.Resources>
     <Style TargetType="Button">
@@ -618,9 +717,25 @@ function Disable-GameBoost {
       </Grid>
     </Border>
 
-    <!-- Game target -->
+    <!-- Pre-flight: deep scan + game target -->
     <Border Grid.Row="5" Background="#161B22" CornerRadius="8" Padding="12" Margin="0,0,0,6">
       <StackPanel>
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+          <StackPanel Grid.Column="0" VerticalAlignment="Center">
+            <TextBlock Text="Deep scan" Foreground="#E6E6E6" FontWeight="Bold" FontSize="13"/>
+            <TextBlock Name="ScanInfo" Foreground="#8B949E" FontSize="10.5" TextWrapping="Wrap"
+                       Text="Find idle apps eating CPU/RAM and pick which to close."/>
+          </StackPanel>
+          <Button Name="ScanBtn" Grid.Column="1" Width="92" Height="34" Margin="8,0,0,0"
+                  Background="#2D7D46" Foreground="White" FontWeight="Bold" Content="Scan now"/>
+        </Grid>
+
+        <Border Height="1" Background="#262C36" Margin="0,11,0,11"/>
+
         <TextBlock Text="Game process (for priority boost)" Foreground="#8B949E" FontSize="11" Margin="0,0,0,4"/>
         <Grid>
           <Grid.ColumnDefinitions>
@@ -654,6 +769,8 @@ $Led         = $win.FindName('Led')
 $LblOn       = $win.FindName('LblOn')
 $LblOff      = $win.FindName('LblOff')
 $DiscordBtn  = $win.FindName('DiscordBtn')
+$ScanBtn     = $win.FindName('ScanBtn')
+$ScanInfo    = $win.FindName('ScanInfo')
 $DetectBtn   = $win.FindName('DetectBtn')
 $TxtTarget   = $win.FindName('TxtTarget')
 $StatusLine  = $win.FindName('StatusLine')
@@ -666,6 +783,7 @@ $Script:LogBox = $win.FindName('LogBox')
 $Script:Tier        = 'High'
 $Script:KeepDiscord = $true
 $Script:Busy        = $false
+$Script:ScanKill    = @()
 $Script:IsOn        = Test-Path $Script:StateFile
 
 $Script:TierHex = @{ Normal = '#2EA043'; High = '#D29922'; Extreme = '#DA3633' }
@@ -702,6 +820,7 @@ function Update-SwitchUI {
     $lock = -not $Script:IsOn
     $TierNormal.IsEnabled = $lock; $TierHigh.IsEnabled = $lock; $TierExtreme.IsEnabled = $lock
     $DiscordBtn.IsEnabled = $lock; $DetectBtn.IsEnabled = $lock; $TxtTarget.IsEnabled = $lock
+    $ScanBtn.IsEnabled = $lock
 
     if ($Script:IsOn) {
         $hex = $Script:TierHex[$Script:Tier]
@@ -728,6 +847,156 @@ function Update-SwitchUI {
         $StatusLine.Text      = "Idle. Pick a tier, then flip the switch."
     }
 }
+
+# Modal Deep Scan review dialog. Returns an array of process names the user
+# chose to close, or $null if they cancelled.
+function Show-ScanDialog($scanOpts, $owner) {
+    $candidates = Get-ScanCandidates $scanOpts
+
+    [xml]$dx = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        Title="Deep scan" Height="560" Width="470" Background="#0E1117"
+        WindowStartupLocation="CenterOwner" ResizeMode="CanResizeWithGrip">
+  <Window.Resources>
+    <Style TargetType="Button">
+      <Setter Property="OverridesDefaultStyle" Value="True"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border CornerRadius="8" Background="{TemplateBinding Background}" Padding="4">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+      <Style.Triggers>
+        <Trigger Property="IsMouseOver" Value="True"><Setter Property="Opacity" Value="0.88"/></Trigger>
+      </Style.Triggers>
+    </Style>
+  </Window.Resources>
+  <Grid Margin="14">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+    <TextBlock Grid.Row="0" Text="Non-essential apps using resources"
+               Foreground="#E6E6E6" FontSize="15" FontWeight="Bold"/>
+    <TextBlock Grid.Row="1" Name="ScanHdr" Foreground="#8B949E" FontSize="11"
+               Margin="0,3,0,8" TextWrapping="Wrap"/>
+    <Border Grid.Row="2" Background="#0A0D12" BorderBrush="#21262D" BorderThickness="1" CornerRadius="6">
+      <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="8">
+        <StackPanel Name="ScanList"/>
+      </ScrollViewer>
+    </Border>
+    <Grid Grid.Row="3" Margin="0,10,0,0">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="Auto"/>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
+      </Grid.ColumnDefinitions>
+      <Button Name="SelAll"  Grid.Column="0" Width="86" Height="32" Background="#21262D" Foreground="#C9D1D9" Content="Select all"/>
+      <Button Name="SelNone" Grid.Column="1" Width="66" Height="32" Margin="6,0,0,0" Background="#21262D" Foreground="#C9D1D9" Content="None"/>
+      <Button Name="UseBtn"  Grid.Column="3" Width="160" Height="32" Background="#2D7D46" Foreground="White" FontWeight="Bold" Content="Queue selected"/>
+    </Grid>
+  </Grid>
+</Window>
+"@
+    $dr  = New-Object System.Xml.XmlNodeReader $dx
+    $dlg = [Windows.Markup.XamlReader]::Load($dr)
+    if ($owner) { $dlg.Owner = $owner }
+    $ScanList = $dlg.FindName('ScanList')
+    $ScanHdr  = $dlg.FindName('ScanHdr')
+    $SelAll   = $dlg.FindName('SelAll')
+    $SelNone  = $dlg.FindName('SelNone')
+    $UseBtn   = $dlg.FindName('UseBtn')
+
+    $warn = if (-not $scanOpts.Target) { " WARNING: no game is set, so a running game could appear below - leave it UNCHECKED." } else { '' }
+
+    $checks = @()
+    if ($candidates.Count -eq 0) {
+        $ScanHdr.Text = "Nothing notable found - your background is already light. Flip the switch when ready."
+        $UseBtn.Content = 'Close'
+    } else {
+        $preCount = @($candidates | Where-Object { $_.Preselect }).Count
+        $ScanHdr.Text = "Found $($candidates.Count) app(s). The $preCount using the most CPU/RAM are pre-checked. Untick anything you want to keep - checked apps close when you flip the switch.$warn"
+        foreach ($c in $candidates) {
+            $cb = New-Object Windows.Controls.CheckBox
+            $cb.Foreground = New-Brush '#C9D1D9'
+            $cb.Margin     = '2,4,2,4'
+            $cb.Tag        = $c.Name
+            $cb.IsChecked  = [bool]$c.Preselect
+            $extra = if ($c.Count -gt 1) { "  (x$($c.Count))" } else { '' }
+            $cb.Content = ('{0}{1}   -   {2} MB   -   {3}% CPU' -f $c.Name, $extra, $c.RamMB, $c.CpuPct)
+            $ScanList.Children.Add($cb) | Out-Null
+            $checks += $cb
+        }
+    }
+
+    $result = @{ names = $null }
+    $SelAll.Add_Click({  foreach ($c in $checks) { $c.IsChecked = $true } })
+    $SelNone.Add_Click({ foreach ($c in $checks) { $c.IsChecked = $false } })
+    $UseBtn.Add_Click({
+        $sel = @()
+        foreach ($c in $checks) { if ($c.IsChecked) { $sel += ([string]$c.Tag).ToLowerInvariant() } }
+        $result.names = $sel
+        $dlg.DialogResult = $true
+        $dlg.Close()
+    }.GetNewClosure())
+
+    $null = $dlg.ShowDialog()
+    return $result.names
+}
+
+# --- Deep scan button ---
+$ScanBtn.Add_Click({
+    if ($Script:IsOn -or $Script:Busy) { return }
+    $ScanBtn.IsEnabled = $false
+    try {
+        $target = ($TxtTarget.Text).Trim() -replace '\.exe$',''
+
+        # A running game looks just like a resource hog to the scanner. If no game
+        # is set, give the user 3s to focus it so we capture and exclude it.
+        if (-not $target) {
+            foreach ($n in 3,2,1) {
+                $ScanInfo.Text = "Click your GAME now so it's never listed... ($n)"
+                $ScanBtn.Dispatcher.Invoke([action]{}, 'Render')
+                Start-Sleep -Seconds 1
+            }
+            $fg = Get-ForegroundProcess
+            if ($fg -and $fg.Id -ne $PID) {
+                $nl = $fg.ProcessName.ToLowerInvariant()
+                if (($Script:ScanProtect -notcontains $nl) -and ($Script:ProtectNames -notcontains $nl)) {
+                    $target = $fg.ProcessName
+                    $TxtTarget.Text = $target
+                    Write-GBLog "Game set to '$target' (excluded from scan)"
+                }
+            }
+        }
+
+        $ScanInfo.Text = 'Scanning processes...'
+        $ScanBtn.Dispatcher.Invoke([action]{}, 'Render')
+        $scanOpts = @{ Target = $target; KeepDiscord = $Script:KeepDiscord }
+        $names = Show-ScanDialog $scanOpts $win
+        if ($null -ne $names) {
+            $Script:ScanKill = $names
+            if ($names.Count -gt 0) {
+                $ScanInfo.Text = "$($names.Count) app(s) queued - they close when you flip the switch."
+                Write-GBLog "Deep Scan: armed $($names.Count) app(s) to close on flip"
+            } else {
+                $ScanInfo.Text = "Nothing queued. Scan again any time."
+            }
+        } else {
+            $ScanInfo.Text = "Find idle apps eating CPU/RAM and pick which to close."
+        }
+    } catch {
+        Write-GBLog "Scan error: $($_.Exception.Message)"
+    } finally {
+        $ScanBtn.IsEnabled = $true
+    }
+})
 
 # --- Tier pills ---
 $selectTier = {
@@ -758,6 +1027,7 @@ $flip = {
         } else {
             $target = ($TxtTarget.Text).Trim() -replace '\.exe$',''
             $opts = Get-TierOptions $Script:Tier $target $Script:KeepDiscord
+            $opts.ScanKill = $Script:ScanKill
             if ($Script:KeepDiscord) { Write-GBLog "Discord protected (won't be closed or slowed)" }
             if ($Script:Tier -eq 'Extreme') { Write-GBLog "Applying EXTREME - screen may flicker as Explorer restarts..." }
             Enable-GameBoost $opts
