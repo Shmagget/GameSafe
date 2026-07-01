@@ -3,33 +3,32 @@
 ================================================================================
   GameBoost  -  Tiered one-switch game performance booster for Windows
 ================================================================================
+  SPDX-License-Identifier: MIT
+  License: MIT - free to use, modify, share, and adapt.
+
   Pick a tier, then flip the switch ON before you play:
 
-    NORMAL  - Light touch. High Performance power plan, stops a few
-              telemetry/search services, disables Game DVR, raises your
-              game's priority. Closes nothing. Use when you just need a nudge.
+    NORMAL  - Light touch. Game Mode on, capture off, and a safe game
+              priority boost.
+              Closes and stops nothing. Use when you just need a nudge.
 
-    HIGH    - Stops the full background-service list and closes bloat apps
-              (OneDrive, Teams, Spotify, Dropbox...). Best for most people.
+    HIGH    - Adds AC-only performance power tuning, pauses indexing/capture
+              services, and closes common bloat apps. Best for most people.
 
     EXTREME - Maximum. Everything in High PLUS:
-                * Ultimate Performance power plan
-                * Extended service shutdown (Update, BITS, telemetry, etc.)
-                * Frees RAM by trimming every background process
-                * Lowers EVERY other app's CPU priority so the game gets the cores
-                * Strips Windows visual effects / animations / transparency
-                * Network-latency registry tweaks
-                * Restarts Explorer to free its memory
-                * Closes heavy apps including web browsers
-              Built to squeeze real performance out of weak PCs.
+                * Most aggressive temporary GameBoost power-plan tuning
+                * Extended reversible service shutdown
+                * Closes heavier apps including web browsers and Adobe helpers
+                * Keeps the game on a safer AboveNormal priority
+              Built for weak PCs without RAM trimming, broad priority lowering,
+              or Explorer restarts that can make FPS worse.
 
-  Flip OFF when done and GameBoost restores EVERYTHING it changed (saved to
-  disk, so it works even after you close the window). A reboot is always a
-  clean fallback - power plan, priorities and services all reset on restart.
+  Flip OFF when done and GameBoost restores the saved power plan, services,
+  registry values and touched process priorities. Apps it closes are recorded
+  and relaunched on OFF when Windows exposes a usable executable path.
 
   SAFETY: Never touches critical Windows processes, never disables your
-  antivirus, and never uses Realtime priority (which can freeze a PC). All
-  targets come from the editable allow-lists below.
+  antivirus, and never uses Realtime priority (which can freeze a PC).
 ================================================================================
 #>
 
@@ -51,44 +50,42 @@ Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 
+# A second UI could otherwise overwrite an active recovery ledger. The mutex is
+# released automatically if this process crashes.
+$createdNew = $false
+$Script:InstanceMutex = New-Object System.Threading.Mutex($true, 'Local\GameBoost.SingleInstance', [ref]$createdNew)
+if (-not $createdNew) {
+    [void][Windows.MessageBox]::Show('GameBoost is already open in this Windows session.', 'GameBoost')
+    exit
+}
+
 # ============================================================================
 # CONFIG  -  edit these lists to taste
 # ============================================================================
 
-# Services stopped at NORMAL (and above). Clearly useless while gaming.
+# Services stopped at HIGH (and above). These can create measurable CPU/disk
+# work. SysMain is deliberately left alone because disabling caching can
+# increase game stutter.
 $Script:SvcLight = @(
-    'SysMain'           # SuperFetch / prefetch
     'WSearch'           # Windows Search indexer (disk + CPU spikes)
     'DiagTrack'         # Connected User Experiences and Telemetry
-    'dmwappushservice'  # WAP push routing (telemetry)
-    'MapsBroker'        # Downloaded Maps Manager
+    'BcastDVRUserService_*' # Game DVR broadcast/capture service
 )
 
 # Added at HIGH (and above).
 $Script:SvcStandard = @(
-    'Spooler'           # Print Spooler (remove if you print while gaming)
-    'Fax'
-    'WMPNetworkSvc'     # Windows Media Player network sharing
+    'MapsBroker'        # Downloaded Maps Manager
     'WerSvc'            # Windows Error Reporting
-    'PcaSvc'            # Program Compatibility Assistant
-    'RetailDemo'
 )
 
-# Added at EXTREME only. More aggressive but still safe; restarted on OFF.
+# Added at EXTREME only. The update stack is skipped when servicing is active.
 $Script:SvcExtended = @(
-    'wuauserv'          # Windows Update (no mid-game downloads)
+    'wuauserv'          # Windows Update
     'BITS'              # Background Intelligent Transfer
-    'DoSvc'             # Delivery Optimization (update peer sharing)
-    'CDPSvc'            # Connected Devices Platform
-    'lfsvc'             # Geolocation
-    'WbioSrvc'          # Windows Biometric
-    'TabletInputService'# Touch keyboard / handwriting
-    'SensorService'
-    'TrkWks'            # Distributed Link Tracking
-    'wisvc'             # Windows Insider
-    'PrintNotify'
-    'RemoteRegistry'
+    'DoSvc'             # Delivery Optimization
+    'dmwappushservice'  # WAP push routing (telemetry)
 )
+$Script:UpdateServiceNames = @('wuauserv','bits','dosvc')
 
 # Background apps CLOSED at HIGH (and above). User apps, not system processes.
 $Script:BloatStandard = @(
@@ -103,6 +100,8 @@ $Script:BloatStandard = @(
     'Cortana'
     'PhoneExperienceHost'   # Phone Link
     'WidgetService','Widgets'
+    'Copilot'
+    'MicrosoftStartFeedProvider'
     'GameBarFTServer'
 )
 
@@ -110,20 +109,19 @@ $Script:BloatStandard = @(
 $Script:BloatExtended = @(
     'Discord'
     'msedge','chrome','firefox','brave','opera','vivaldi'
-    'OUTLOOK','WINWORD','EXCEL'
-    'EpicWebHelper'
-    'RzSynapse','iCUE','LGHUB','LightingService','ArmouryCrate.Service'
-    'AdobeIPCBroker','CCXProcess','Acrobat'
+    'GameBar','XboxGameBar','GameBarFTServer'
+    'AdobeIPCBroker','CCXProcess','Acrobat','AdobeCollabSync'
+    'GoogleCrashHandler','GoogleCrashHandler64','GoogleUpdate'
 )
 
-# Processes NEVER de-prioritized by the Extreme "lower everything else" pass.
-# (Critical UI, audio, and anti-cheat - lowering these causes stutter/kicks.)
+# Processes protected from Deep Scan cleanup and any future priority experiments.
+# Critical UI, audio, and anti-cheat should stay untouched.
 $Script:ProtectNames = @(
     'explorer','dwm','audiodg','csrss','wininit','winlogon','services','lsass',
     'smss','svchost','system','idle','registry','conhost','fontdrvhost',
     'powershell','pwsh','sihost','ctfmon','SystemSettings',
     'EasyAntiCheat','EasyAntiCheat_EOS','BEService','vgc','vgtray','vgk',
-    'SteamService'
+    'SteamService','obs32','obs64','Streamlabs OBS','voicemeeter','voicemeeter8'
 ) | ForEach-Object { $_.ToLowerInvariant() }
 
 # The hard "NEVER kill" set for Deep Scan. Anything here is treated as essential
@@ -155,14 +153,18 @@ $Script:ScanProtect = @(
     'riotclientservices','leagueclient','leagueclientux'
 ) | ForEach-Object { $_.ToLowerInvariant() }
 
-$Script:HighPerfGuid = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
-$Script:UltimateGuid = 'e9a42b02-d5df-448d-aa00-03f14749eb61'
-$Script:MultimediaProfile = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
 $Script:StateDir  = Join-Path $env:LOCALAPPDATA 'GameBoost'
 $Script:StateFile = Join-Path $Script:StateDir 'state.json'
 
+# Power plan sub-settings tuned only inside the temporary GameBoost plan.
+$Script:PowerGuids = @{
+    SUB_PROCESSOR  = '54533251-82be-4824-96c1-47b60b740d00'
+    PROCTHROTTLEMAX= 'bc5038f7-23e0-4960-96da-33abaf5935ec'
+    PERFEPP        = '36687f9e-e3a5-4dbf-b1dc-15eb381c6863'
+}
+
 # ----------------------------------------------------------------------------
-# Win32 helpers: foreground window + RAM working-set trimming
+# Win32 helper: foreground window detection
 # ----------------------------------------------------------------------------
 if (-not ([System.Management.Automation.PSTypeName]'GBNative').Type) {
 Add-Type @"
@@ -171,7 +173,6 @@ using System.Runtime.InteropServices;
 public class GBNative {
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
-    [DllImport("psapi.dll")]  public static extern bool EmptyWorkingSet(IntPtr hProcess);
 }
 "@
 }
@@ -204,10 +205,361 @@ function Get-ActiveSchemeGuid {
     return $null
 }
 
-function Get-RegValue($path, $name) {
-    $item = Get-ItemProperty -Path $path -Name $name -ErrorAction SilentlyContinue
-    if ($null -eq $item) { return $null }
-    return $item.$name
+function Test-GBPowerSchemeExists([string]$guid) {
+    if (-not $guid) { return $false }
+    $out = powercfg /list 2>$null | Out-String
+    return ($out -match [regex]::Escape($guid))
+}
+
+function Get-GBProcessPathByName([string]$name) {
+    if (-not $name) { return $null }
+    foreach ($p in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
+        try {
+            if ($p.Path -and (Test-Path -LiteralPath $p.Path)) { return [string]$p.Path }
+        } catch { }
+        try {
+            $cim = Get-CimInstance Win32_Process -Filter "ProcessId=$($p.Id)" -ErrorAction Stop
+            if ($cim.ExecutablePath -and (Test-Path -LiteralPath $cim.ExecutablePath)) { return [string]$cim.ExecutablePath }
+        } catch { }
+    }
+    return $null
+}
+
+function Save-GBState($state) {
+    if (-not (Test-Path $Script:StateDir)) {
+        New-Item -ItemType Directory -Path $Script:StateDir -Force | Out-Null
+    }
+    $tempFile = "$($Script:StateFile).tmp"
+    $backupFile = "$($Script:StateFile).bak"
+    $json = $state | ConvertTo-Json -Depth 8
+    [IO.File]::WriteAllText($tempFile, $json, (New-Object Text.UTF8Encoding($false)))
+    if (Test-Path $Script:StateFile) {
+        [IO.File]::Replace($tempFile, $Script:StateFile, $backupFile)
+        Remove-Item -LiteralPath $backupFile -Force -ErrorAction SilentlyContinue
+    }
+    else { [IO.File]::Move($tempFile, $Script:StateFile) }
+}
+
+function Test-GBStateProperty($state, [string]$name) {
+    if ($state -is [System.Collections.IDictionary]) { return $state.Contains($name) }
+    return @($state.PSObject.Properties.Name) -contains $name
+}
+
+function Set-GBStateProperty($state, [string]$name, $value) {
+    if ($state -is [System.Collections.IDictionary]) { $state[$name] = $value; return }
+    if (Test-GBStateProperty $state $name) { $state.$name = $value }
+    else { $state | Add-Member -NotePropertyName $name -NotePropertyValue $value -Force }
+}
+
+function Test-GBOnBattery {
+    try {
+        $batt = @(Get-CimInstance Win32_Battery -ErrorAction Stop)
+        return ($batt.Count -gt 0 -and @($batt | Where-Object { $_.BatteryStatus -eq 1 }).Count -gt 0)
+    } catch { return $false }
+}
+
+function Get-GBStartIso($process) {
+    try { return $process.StartTime.ToUniversalTime().ToString('o') } catch { return $null }
+}
+
+function Add-GBPriorityRecord($state, $process) {
+    if (-not (Test-GBStateProperty $state 'priorityChanges')) { Set-GBStateProperty $state 'priorityChanges' ([object[]]@()) }
+    $startIso = Get-GBStartIso $process
+    foreach ($r in @($state.priorityChanges)) {
+        if ([int]$r.id -eq [int]$process.Id -and [string]$r.startTime -eq [string]$startIso) { return $r }
+    }
+    $oldPriority = $null
+    try { $oldPriority = [string]$process.PriorityClass } catch { return }
+    $record = @{
+        id = [int]$process.Id
+        name = [string]$process.ProcessName
+        startTime = $startIso
+        priority = $oldPriority
+    }
+    $state.priorityChanges += $record
+    Save-GBState $state
+    return $record
+}
+
+function Set-GBProcessPriority($state, $process, [string]$priority) {
+    $record = Add-GBPriorityRecord $state $process
+    if (-not $record) { return $false }
+    try {
+        if ([string]$process.PriorityClass -ne $priority) {
+            $process.PriorityClass = $priority
+        }
+        Set-GBStateProperty $record 'appliedPriority' $priority
+        Save-GBState $state
+        return $true
+    } catch { return $false }
+}
+
+function Restore-GBPriorities($state) {
+    if (-not $state.priorityChanges) { return $true }
+    $restored = 0
+    $restoreOk = $true
+    foreach ($r in @($state.priorityChanges)) {
+        try {
+            $p = Get-Process -Id ([int]$r.id) -ErrorAction Stop
+        } catch { continue }
+        try {
+            if ($p.ProcessName -ne [string]$r.name) { continue }
+            $startIso = Get-GBStartIso $p
+            if ($r.startTime -and $startIso -and ([string]$r.startTime -ne [string]$startIso)) { continue }
+            if ((Test-GBStateProperty $r 'appliedPriority') -and [string]$p.PriorityClass -ne [string]$r.appliedPriority) {
+                Write-GBLog "Preserved newer priority change: $($p.ProcessName)"
+                continue
+            }
+            $p.PriorityClass = [string]$r.priority
+            $restored++
+        } catch { $restoreOk = $false }
+    }
+    Write-GBLog "Restored priority of $restored touched process(es)"
+    return $restoreOk
+}
+
+function Get-GBClosedAppRecord($process, [string]$reason) {
+    $path = $null
+    $cmd  = $null
+    $workingSetMB = 0
+    try { $path = $process.Path } catch { }
+    try { $workingSetMB = [math]::Round(([double]$process.WorkingSet64 / 1MB), 1) } catch { }
+    try {
+        $cim = Get-CimInstance Win32_Process -Filter "ProcessId=$($process.Id)" -ErrorAction Stop
+        if (-not $path -and $cim.ExecutablePath) { $path = [string]$cim.ExecutablePath }
+        if ($cim.CommandLine) { $cmd = [string]$cim.CommandLine }
+    } catch { }
+
+    return @{
+        id = [int]$process.Id
+        name = [string]$process.ProcessName
+        path = $path
+        commandLine = $cmd
+        startTime = (Get-GBStartIso $process)
+        workingSetMB = $workingSetMB
+        reason = $reason
+    }
+}
+
+function Add-GBClosedAppRecord($state, $record) {
+    if (-not (Test-GBStateProperty $state 'closedApps')) { Set-GBStateProperty $state 'closedApps' ([object[]]@()) }
+    foreach ($r in @($state.closedApps)) {
+        if ([int]$r.id -eq [int]$record.id -and [string]$r.startTime -eq [string]$record.startTime) { return }
+    }
+    $state.closedApps += $record
+    Save-GBState $state
+}
+
+function Stop-GBTrackedProcess($state, $process, $opts, [string]$reason) {
+    if ($process.Id -eq $PID) { return $false }
+    if (Test-KeepProcess $process.ProcessName $opts) { return $false }
+    $record = Get-GBClosedAppRecord $process $reason
+    if (-not $record.path -or -not (Test-Path -LiteralPath $record.path)) {
+        Write-GBLog "  (left $($process.ProcessName) running: no reliable relaunch path)"
+        return $false
+    }
+    # Persist intent first. If GameBoost itself closes after Stop-Process, OFF
+    # still knows what must be relaunched. A still-running app is skipped later.
+    Add-GBClosedAppRecord $state $record
+    try {
+        $hasWindow = $false
+        try { $hasWindow = ($process.MainWindowHandle -ne [IntPtr]::Zero) } catch { }
+        if ($hasWindow) {
+            if (-not $process.CloseMainWindow() -or -not $process.WaitForExit(3000)) {
+                throw "The app did not accept a normal close request"
+            }
+        } else {
+            Stop-Process -Id $process.Id -Force -ErrorAction Stop
+        }
+        return $true
+    } catch {
+        $state.closedApps = @($state.closedApps | Where-Object {
+            -not ([int]$_.id -eq [int]$record.id -and [string]$_.startTime -eq [string]$record.startTime)
+        })
+        Save-GBState $state
+        return $false
+    }
+}
+
+function Get-GBLaunchArguments([string]$commandLine, [string]$path) {
+    if (-not $commandLine -or -not $path) { return $null }
+    $cmd = $commandLine.Trim()
+    $quotedPath = '"' + $path + '"'
+    if ($cmd.StartsWith($quotedPath, [StringComparison]::OrdinalIgnoreCase)) {
+        return $cmd.Substring($quotedPath.Length).Trim()
+    }
+    if ($cmd.StartsWith($path, [StringComparison]::OrdinalIgnoreCase)) {
+        return $cmd.Substring($path.Length).Trim()
+    }
+    return $null
+}
+
+function Restore-GBClosedApps($state) {
+    if (-not $state.closedApps) { return $true }
+    $seen = @{}
+    $relaunched = 0
+    $restoreOk = $true
+    foreach ($r in @($state.closedApps)) {
+        $path = [string]$r.path
+        $name = [string]$r.name
+        if (-not $path -or -not (Test-Path -LiteralPath $path)) {
+            Write-GBLog "  (cannot relaunch ${name}: executable path is unavailable)"
+            continue
+        }
+        $key = $path.ToLowerInvariant()
+        $alreadyRunning = $false
+        foreach ($p in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
+            $runningPath = $null; try { $runningPath = [string]$p.Path } catch { }
+            if ($runningPath -and $runningPath.ToLowerInvariant() -eq $key) { $alreadyRunning = $true; break }
+        }
+        if ($alreadyRunning) { continue }
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = $true
+
+        # Multi-process browsers and Electron apps record several rows. Prefer
+        # the shortest non-renderer command line so one normal parent process
+        # recreates its own helpers.
+        $launchRecord = @($state.closedApps | Where-Object {
+            [string]$_.path -and ([string]$_.path).ToLowerInvariant() -eq $key
+        } | Sort-Object `
+            @{ Expression = { if ([string]$_.commandLine -match '(?i)--type=|--utility-sub-type=') { 1 } else { 0 } } }, `
+            @{ Expression = { ([string]$_.commandLine).Length } } | Select-Object -First 1)
+        $arguments = Get-GBLaunchArguments ([string]$launchRecord.commandLine) $path
+        try {
+            $startArgs = @{ FilePath = $path; WorkingDirectory = (Split-Path -Parent $path); ErrorAction = 'Stop' }
+            if ($arguments) { $startArgs.ArgumentList = $arguments }
+            Start-Process @startArgs
+            $relaunched++
+        } catch {
+            try {
+                Start-Process -FilePath explorer.exe -ArgumentList "`"$path`"" -ErrorAction Stop
+                $relaunched++
+            } catch {
+                $restoreOk = $false
+                Write-GBLog "  (could not relaunch $name; OFF can retry)"
+            }
+        }
+    }
+    Write-GBLog "Relaunched $relaunched app(s) GameBoost had closed"
+    return $restoreOk
+}
+
+function Backup-GBRegValue($state, [string]$path, [string]$name) {
+    if (-not (Test-GBStateProperty $state 'registry')) { Set-GBStateProperty $state 'registry' ([object[]]@()) }
+    foreach ($r in @($state.registry)) {
+        if ([string]$r.path -eq $path -and [string]$r.name -eq $name) { return $r }
+    }
+
+    $exists = $false
+    $value  = $null
+    $kind   = $null
+    $keyExisted = Test-Path $path
+    if ($keyExisted) {
+        try {
+            $item = Get-ItemProperty -Path $path -Name $name -ErrorAction Stop
+            $value = $item.$name
+            $exists = $true
+            try { $kind = [string](Get-Item -Path $path).GetValueKind($name) } catch { $kind = $null }
+        } catch { }
+    }
+
+    $record = @{
+        path = $path
+        name = $name
+        keyExisted = $keyExisted
+        existed = $exists
+        value = $value
+        kind = $kind
+    }
+    $state.registry += $record
+    Save-GBState $state
+    return $record
+}
+
+function Set-GBRegValue($state, [string]$path, [string]$name, $value, [string]$kind) {
+    $record = Backup-GBRegValue $state $path $name
+    if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+    try {
+        Set-ItemProperty -Path $path -Name $name -Value $value -Type $kind -Force -ErrorAction Stop
+        $record.appliedValue = $value
+        $record.appliedKind = $kind
+        Save-GBState $state
+        return $true
+    } catch {
+        Write-GBLog "  (registry tweak skipped: $name)"
+        return $false
+    }
+}
+
+function Restore-GBRegistry($state) {
+    if (-not $state.registry) { return $true }
+    $restored = 0
+    $restoreOk = $true
+    foreach ($r in @($state.registry)) {
+        $path = [string]$r.path
+        $name = [string]$r.name
+        try {
+            # Do not overwrite a value the user or Windows changed while boost
+            # was active. Legacy ledgers without appliedValue still restore.
+            if (Test-GBStateProperty $r 'appliedValue') {
+                $currentExists = $false
+                $currentValue = $null
+                if (Test-Path $path) {
+                    $key = Get-Item -Path $path -ErrorAction Stop
+                    if (@($key.GetValueNames()) -contains $name) {
+                        $currentExists = $true
+                        $currentValue = $key.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                    }
+                }
+                if (-not $currentExists -or [string]$currentValue -ne [string]$r.appliedValue) {
+                    Write-GBLog "Preserved newer registry change: $name"
+                    continue
+                }
+            }
+            if ([bool]$r.existed) {
+                if (-not (Test-Path $path)) { New-Item -Path $path -Force | Out-Null }
+                $kind = if ($r.kind) { [string]$r.kind } else { 'String' }
+                Set-ItemProperty -Path $path -Name $name -Value $r.value -Type $kind -Force -ErrorAction Stop
+            } else {
+                if (Test-Path $path) {
+                    $restoreKey = Get-Item -Path $path -ErrorAction Stop
+                    if (@($restoreKey.GetValueNames()) -contains $name) {
+                        Remove-ItemProperty -Path $path -Name $name -ErrorAction Stop
+                    }
+                }
+                if ((Test-GBStateProperty $r 'keyExisted') -and -not [bool]$r.keyExisted -and (Test-Path $path)) {
+                    try {
+                        $key = Get-Item -Path $path -ErrorAction Stop
+                        if ($key.GetValueNames().Count -eq 0 -and $key.GetSubKeyNames().Count -eq 0) {
+                            Remove-Item -Path $path -Force -ErrorAction Stop
+                        }
+                    } catch { }
+                }
+            }
+            $restored++
+        } catch { $restoreOk = $false }
+    }
+    Write-GBLog "Restored $restored registry setting(s)"
+    return $restoreOk
+}
+
+function New-GBPowerPlan([string]$baseGuid, [string]$tier) {
+    $out = powercfg -duplicatescheme $baseGuid 2>$null | Out-String
+    if ($out -match '([0-9a-fA-F-]{36})') {
+        $newGuid = $Matches[1]
+        powercfg -changename $newGuid "GameBoost $tier" "Temporary GameBoost gaming plan - removed when boost is turned off" 2>$null
+        return $newGuid
+    }
+    return $null
+}
+
+function Apply-GBPowerTweaks([string]$scheme, [string]$tier) {
+    $g = $Script:PowerGuids
+    # AC-only and deliberately narrow. OEM battery, thermal, storage, PCIe,
+    # USB, Wi-Fi, boost-mode, and minimum-processor policies are preserved.
+    $eppAc = if ($tier -eq 'Extreme') { 0 } else { 15 }
+    powercfg /setacvalueindex $scheme $g.SUB_PROCESSOR $g.PROCTHROTTLEMAX 100 2>$null | Out-Null
+    powercfg /setacvalueindex $scheme $g.SUB_PROCESSOR $g.PERFEPP $eppAc 2>$null | Out-Null
 }
 
 # ----------------------------------------------------------------------------
@@ -222,26 +574,23 @@ function Test-KeepProcess([string]$name, $opts) {
     return $false
 }
 
-function Get-TierOptions([string]$tier, [string]$target, [bool]$keepDiscord) {
+function Get-TierOptions([string]$tier, [string]$target, [bool]$keepDiscord, [string]$targetPath) {
     $o = @{
-        Tier = $tier; Target = $target; KeepDiscord = $keepDiscord
+        Tier = $tier; Target = $target; TargetPath = $targetPath; KeepDiscord = $keepDiscord
         PowerMode = 'none'; ServiceLevel = 'none'; Bloat = 'none'
         Dvr = $false; Priority = $false
-        LowerOthers = $false; TrimRam = $false; VisualFx = $false; Network = $false
     }
     switch ($tier) {
         'Normal' {
-            $o.PowerMode = 'high'; $o.ServiceLevel = 'light'
             $o.Dvr = $true; $o.Priority = $true
         }
         'High' {
-            $o.PowerMode = 'high'; $o.ServiceLevel = 'standard'; $o.Bloat = 'standard'
+            $o.PowerMode = 'adaptive'; $o.ServiceLevel = 'standard'; $o.Bloat = 'standard'
             $o.Dvr = $true; $o.Priority = $true
         }
         'Extreme' {
-            $o.PowerMode = 'ultimate'; $o.ServiceLevel = 'extended'; $o.Bloat = 'extended'
+            $o.PowerMode = 'adaptive'; $o.ServiceLevel = 'extended'; $o.Bloat = 'extended'
             $o.Dvr = $true; $o.Priority = $true
-            $o.LowerOthers = $true; $o.TrimRam = $true; $o.VisualFx = $true; $o.Network = $true
         }
     }
     return $o
@@ -263,20 +612,52 @@ function Get-BloatSet([string]$level) {
     }
 }
 
+function Test-GBWindowsServicingActive {
+    foreach ($name in @('TiWorker','TrustedInstaller','MoUsoCoreWorker','poqexec','dismhost')) {
+        if (Get-Process -Name $name -ErrorAction SilentlyContinue) { return $true }
+    }
+    return $false
+}
+
+function Get-GBRunningDependentNames($service) {
+    $result = @()
+    $seen = @{}
+    $queue = @($service.DependentServices)
+    while ($queue.Count -gt 0) {
+        $current = $queue[0]
+        if ($queue.Count -gt 1) { $queue = @($queue[1..($queue.Count - 1)]) } else { $queue = @() }
+        if (-not $current -or $seen.ContainsKey($current.Name)) { continue }
+        $seen[$current.Name] = $true
+        if ($current.Status -eq 'Running') { $result += $current.Name }
+        try { $queue += @($current.DependentServices) } catch { }
+    }
+    return @($result)
+}
+
 # ----------------------------------------------------------------------------
-# Deep Scan: sample live CPU% + RAM for every process in our session, drop all
-# essential ones (system, game, Discord-if-kept, anti-cheat, drivers, launchers)
-# and return the non-essential resource users, grouped by name, sorted by usage.
+# Deep Scan: sample live CPU%, RAM, and disk I/O for every process in our
+# session, drop all essential ones (system, game, Discord-if-kept, anti-cheat,
+# drivers, launchers) and return the non-essential resource users, grouped by
+# name, sorted by usage.
 # ----------------------------------------------------------------------------
 function Get-ScanCandidates($opts) {
     $cores     = [Environment]::ProcessorCount
     $mySession = (Get-Process -Id $PID).SessionId
-    $interval  = 0.6
 
     # First CPU-time snapshot
     $snap = @{}
     foreach ($p in Get-Process) { try { $snap[$p.Id] = $p.CPU } catch { } }
-    Start-Sleep -Milliseconds ([int]($interval * 1000))
+    $sampleWatch = [Diagnostics.Stopwatch]::StartNew()
+    Start-Sleep -Milliseconds 1500
+
+    $ioById = @{}
+    try {
+        foreach ($perf in Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -ErrorAction Stop) {
+            if ($perf.IDProcess -gt 0) { $ioById[[int]$perf.IDProcess] = [int64]$perf.IODataBytesPersec }
+        }
+    } catch { }
+    $sampleWatch.Stop()
+    $interval = [math]::Max(0.1, $sampleWatch.Elapsed.TotalSeconds)
 
     $rows = @{}
     foreach ($p in Get-Process) {
@@ -294,25 +675,39 @@ function Get-ScanCandidates($opts) {
         if ($null -ne $t1 -and $null -ne $t2) { $cpu = (($t2 - $t1) / $interval / $cores) * 100 }
         if ($cpu -lt 0) { $cpu = 0 }
         $ram = 0; try { $ram = $p.WorkingSet64 } catch { }
+        $disk = 0; if ($ioById.ContainsKey($p.Id)) { $disk = [int64]$ioById[$p.Id] }
+        $procPath = $null; try { $procPath = [string]$p.Path } catch { }
 
         if (-not $rows.ContainsKey($nl)) {
-            $rows[$nl] = [pscustomobject]@{ Name = $n; Count = 0; Cpu = 0.0; RamBytes = [int64]0 }
+            $rows[$nl] = [pscustomobject]@{
+                Name = $n; Count = 0; Cpu = 0.0; RamBytes = [int64]0; DiskBytes = [int64]0
+                HasWindow = $false; Path = $procPath; PathConflict = $false
+            }
         }
+        if ($procPath -and $rows[$nl].Path -and $procPath -ine [string]$rows[$nl].Path) { $rows[$nl].PathConflict = $true }
+        elseif ($procPath -and -not $rows[$nl].Path) { $rows[$nl].Path = $procPath }
         $rows[$nl].Count++
         $rows[$nl].Cpu      += $cpu
         $rows[$nl].RamBytes += [int64]$ram
+        $rows[$nl].DiskBytes += [int64]$disk
+        try { if ($p.MainWindowHandle -ne [IntPtr]::Zero) { $rows[$nl].HasWindow = $true } } catch { }
     }
 
-    # Keep only ones that actually use resources; attach MB + preselect flag
+    # Keep only ones that actually use resources; attach MB, MB/s + preselect flag
     $list = foreach ($r in $rows.Values) {
         $mb = [math]::Round($r.RamBytes / 1MB)
-        if ($mb -lt 15 -and $r.Cpu -lt 0.5) { continue }   # hide trivia
+        $diskMbps = [math]::Round($r.DiskBytes / 1MB, 1)
+        if ($mb -lt 15 -and $r.Cpu -lt 0.5 -and $diskMbps -lt 0.2) { continue }   # hide trivia
         $r | Add-Member -NotePropertyName RamMB -NotePropertyValue $mb -Force
         $r | Add-Member -NotePropertyName CpuPct -NotePropertyValue ([math]::Round($r.Cpu,1)) -Force
-        $r | Add-Member -NotePropertyName Preselect -NotePropertyValue ($mb -ge 100 -or $r.Cpu -ge 1.0) -Force
+        $r | Add-Member -NotePropertyName DiskMBps -NotePropertyValue $diskMbps -Force
+        # Memory occupancy alone does not mean an app is stealing frame time.
+        $heavy = ($r.Cpu -ge 2.0 -or $diskMbps -ge 1.0)
+        $reliablePath = ([string]$r.Path -and -not $r.PathConflict)
+        $r | Add-Member -NotePropertyName Preselect -NotePropertyValue ($heavy -and -not $r.HasWindow -and $reliablePath) -Force
         $r
     }
-    return @($list | Sort-Object -Property @{e='Cpu';Descending=$true}, @{e='RamBytes';Descending=$true})
+    return @($list | Sort-Object -Property @{e='Cpu';Descending=$true}, @{e='DiskBytes';Descending=$true}, @{e='RamBytes';Descending=$true})
 }
 
 # ============================================================================
@@ -325,34 +720,46 @@ function Enable-GameBoost($opts) {
 
     $state = [ordered]@{
         timestamp = (Get-Date).ToString('o')
+        phase     = 'enabling'
         tier      = $opts.Tier
         target    = $opts.Target
+        targetPath = $opts.TargetPath
         opts      = $opts
         prevPowerScheme = $null
+        powerPlanCreated = $null
+        powerPlanBase    = $null
         services  = @()
-        gameDvr   = $null
-        network   = $null
-        visualFx  = $null
+        registry  = @()
+        priorityChanges = @()
+        closedApps = @()
+    }
+    Save-GBState $state
+    if (Test-GBOnBattery) {
+        Write-GBLog "Laptop appears to be on battery - plug in for best FPS and less throttling."
     }
 
     # --- Power plan ---
     if ($opts.PowerMode -ne 'none') {
         $state.prevPowerScheme = Get-ActiveSchemeGuid
-        if ($opts.PowerMode -eq 'ultimate') {
-            $list = powercfg /list | Out-String
-            if ($list -notmatch $Script:UltimateGuid) {
-                powercfg -duplicatescheme $Script:UltimateGuid 2>$null | Out-Null
-            }
-            powercfg /setactive $Script:UltimateGuid 2>$null
-            if ((Get-ActiveSchemeGuid) -ieq $Script:UltimateGuid) {
-                Write-GBLog "Power plan -> Ultimate Performance"
+        # Clone the user's active plan so OEM thermal/fan behavior is retained,
+        # then tune only the temporary copy.
+        $baseGuid = $state.prevPowerScheme
+        $state.powerPlanBase = $baseGuid
+        Save-GBState $state
+
+        $gbPlan = if ($baseGuid) { New-GBPowerPlan $baseGuid $opts.Tier } else { $null }
+        if ($gbPlan) {
+            $state.powerPlanCreated = $gbPlan
+            Save-GBState $state
+            Apply-GBPowerTweaks $gbPlan $opts.Tier
+            powercfg /setactive $gbPlan 2>$null
+            if ((Get-ActiveSchemeGuid) -ieq $gbPlan) {
+                Write-GBLog "Power plan -> temporary GameBoost $($opts.Tier) plan"
             } else {
-                powercfg /setactive $Script:HighPerfGuid 2>$null
-                Write-GBLog "Ultimate plan unavailable -> using High Performance"
+                Write-GBLog "Temporary plan could not be activated; existing plan remains active"
             }
         } else {
-            powercfg /setactive $Script:HighPerfGuid 2>$null
-            Write-GBLog "Power plan -> High Performance"
+            Write-GBLog "Could not create a temporary plan; existing plan remains active"
         }
     }
 
@@ -360,14 +767,36 @@ function Enable-GameBoost($opts) {
     $svcSet = Get-ServiceSet $opts.ServiceLevel
     if ($svcSet.Count -gt 0) {
         $stopped = 0
-        foreach ($name in $svcSet) {
-            $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
-            if (-not $svc) { continue }
-            $wasRunning = ($svc.Status -eq 'Running')
-            $state.services += @{ name = $name; wasRunning = $wasRunning }
-            if ($wasRunning) {
-                try { Stop-Service -Name $name -Force -ErrorAction Stop; $stopped++ }
-                catch { Write-GBLog "  (could not stop $name)" }
+        $serviceSeen = @{}
+        $servicingActive = Test-GBWindowsServicingActive
+        if ($servicingActive -and $opts.ServiceLevel -eq 'extended') {
+            Write-GBLog "Windows servicing is active - update services will be left running"
+        }
+        foreach ($pattern in $svcSet) {
+            foreach ($svc in @(Get-Service -Name $pattern -ErrorAction SilentlyContinue)) {
+                if ($serviceSeen.ContainsKey($svc.Name)) { continue }
+                if ($servicingActive -and $Script:UpdateServiceNames -contains $svc.Name.ToLowerInvariant()) { continue }
+                $serviceSeen[$svc.Name] = $true
+                $wasRunning = ($svc.Status -eq 'Running')
+                $deps = @()
+                try { $deps = @(Get-GBRunningDependentNames $svc) } catch { }
+                $serviceRecord = @{
+                    name = $svc.Name; wasRunning = $wasRunning
+                    stopAttempted = $false; stopSucceeded = $false; dependents = $deps
+                }
+                $state.services += $serviceRecord
+                Save-GBState $state
+                if ($wasRunning) {
+                    try {
+                        $serviceRecord.stopAttempted = $true
+                        Save-GBState $state
+                        Stop-Service -Name $svc.Name -Force -ErrorAction Stop
+                        $serviceRecord.stopSucceeded = $true
+                        Save-GBState $state
+                        $stopped++
+                    }
+                    catch { Write-GBLog "  (could not stop $($svc.Name))" }
+                }
             }
         }
         Write-GBLog "Stopped $stopped background service(s)"
@@ -379,9 +808,7 @@ function Enable-GameBoost($opts) {
         $killed = 0
         foreach ($name in $bloatSet) {
             foreach ($p in (Get-Process -Name $name -ErrorAction SilentlyContinue)) {
-                if ($p.Id -eq $PID) { continue }
-                if (Test-KeepProcess $p.ProcessName $opts) { continue }
-                try { Stop-Process -Id $p.Id -Force -ErrorAction Stop; $killed++ } catch { }
+                if (Stop-GBTrackedProcess $state $p $opts 'tier-bloat') { $killed++ }
             }
         }
         Write-GBLog "Closed $killed background app process(es)"
@@ -392,14 +819,19 @@ function Enable-GameBoost($opts) {
     # protect, the checks below stop it from being killed.
     if ($opts.ScanKill -and @($opts.ScanKill).Count -gt 0) {
         $sk = 0
-        foreach ($name in $opts.ScanKill) {
+        foreach ($entry in $opts.ScanKill) {
+            $name = if ($entry -is [string]) { [string]$entry } else { [string]$entry.Name }
+            $expectedPath = if ($entry -is [string]) { $null } else { [string]$entry.Path }
+            if (-not $name) { continue }
             $nl = ([string]$name).ToLowerInvariant()
             if ($Script:ScanProtect -contains $nl) { continue }
             if ($Script:ProtectNames -contains $nl) { continue }
             foreach ($p in (Get-Process -Name $name -ErrorAction SilentlyContinue)) {
-                if ($p.Id -eq $PID) { continue }
-                if (Test-KeepProcess $p.ProcessName $opts) { continue }
-                try { Stop-Process -Id $p.Id -Force -ErrorAction Stop; $sk++ } catch { }
+                if ($expectedPath) {
+                    $actualPath = $null; try { $actualPath = [string]$p.Path } catch { }
+                    if (-not $actualPath -or $actualPath -ine $expectedPath) { continue }
+                }
+                if (Stop-GBTrackedProcess $state $p $opts 'deep-scan') { $sk++ }
             }
         }
         Write-GBLog "Deep Scan: closed $sk extra non-essential process(es)"
@@ -409,178 +841,114 @@ function Enable-GameBoost($opts) {
     if ($opts.Dvr) {
         $p1 = 'HKCU:\System\GameConfigStore'
         $p2 = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR'
-        $state.gameDvr = @{
-            gcs = Get-RegValue $p1 'GameDVR_Enabled'
-            dvr = Get-RegValue $p2 'AppCaptureEnabled'
-        }
-        try { Set-ItemProperty -Path $p1 -Name 'GameDVR_Enabled' -Value 0 -Type DWord -Force } catch { }
-        if (-not (Test-Path $p2)) { New-Item -Path $p2 -Force | Out-Null }
-        try { Set-ItemProperty -Path $p2 -Name 'AppCaptureEnabled' -Value 0 -Type DWord -Force } catch { }
-        Write-GBLog "Game DVR / background recording -> off"
-    }
-
-    # --- Network latency tweaks (Extreme) ---
-    if ($opts.Network) {
-        $state.network = @{
-            sysResp     = Get-RegValue $Script:MultimediaProfile 'SystemResponsiveness'
-            netThrottle = Get-RegValue $Script:MultimediaProfile 'NetworkThrottlingIndex'
-        }
-        try {
-            Set-ItemProperty -Path $Script:MultimediaProfile -Name 'SystemResponsiveness' -Value 0 -Type DWord -Force
-            Set-ItemProperty -Path $Script:MultimediaProfile -Name 'NetworkThrottlingIndex' -Value 0xffffffff -Type DWord -Force
-            Write-GBLog "Network throttling disabled, system responsiveness maxed"
-        } catch { Write-GBLog "  (network tweak skipped)" }
+        $p3 = 'HKCU:\SOFTWARE\Microsoft\GameBar'
+        [void](Set-GBRegValue $state $p1 'GameDVR_Enabled' 0 'DWord')
+        [void](Set-GBRegValue $state $p2 'AppCaptureEnabled' 0 'DWord')
+        [void](Set-GBRegValue $state $p2 'HistoricalCaptureEnabled' 0 'DWord')
+        [void](Set-GBRegValue $state $p3 'AllowAutoGameMode' 1 'DWord')
+        [void](Set-GBRegValue $state $p3 'AutoGameModeEnabled' 1 'DWord')
+        Write-GBLog "Game Mode on and background capture off"
     }
 
     # --- Game priority ---
     if ($opts.Priority -and $opts.Target) {
         $n = 0
         foreach ($p in (Get-Process -Name $opts.Target -ErrorAction SilentlyContinue)) {
-            try { $p.PriorityClass = 'High'; $n++ } catch { }
+            if (Set-GBProcessPriority $state $p 'AboveNormal') { $n++ }
         }
-        if ($n -gt 0) { Write-GBLog "Game '$($opts.Target)' priority -> High ($n proc)" }
-        else { Write-GBLog "Game '$($opts.Target)' not running yet (priority applies once it is)" }
+        if ($n -gt 0) { Write-GBLog "Game '$($opts.Target)' priority -> AboveNormal ($n proc)" }
+        else { Write-GBLog "Game '$($opts.Target)' not running yet (watcher will boost it while this window is open)" }
+    } elseif ($opts.Priority) {
+        Write-GBLog "No game process selected - priority boost skipped"
     }
 
-    # --- Lower every OTHER app's priority (Extreme) ---
-    if ($opts.LowerOthers) {
-        $mySession = (Get-Process -Id $PID).SessionId
-        $lowered = 0
-        foreach ($p in Get-Process) {
-            if ($p.Id -eq $PID) { continue }
-            if ($p.SessionId -ne $mySession) { continue }
-            if (Test-KeepProcess $p.ProcessName $opts) { continue }
-            if ($Script:ProtectNames -contains $p.ProcessName.ToLowerInvariant()) { continue }
-            try { $p.PriorityClass = 'BelowNormal'; $lowered++ } catch { }
-        }
-        Write-GBLog "Lowered priority of $lowered other app(s) - cores go to the game"
-    }
+    $releasedMB = [math]::Round((@($state.closedApps) | Measure-Object -Property workingSetMB -Sum).Sum, 0)
+    if ($releasedMB -gt 0) { Write-GBLog "Closed apps had about $releasedMB MB of active memory" }
 
-    # --- Strip visual effects (Extreme) ---
-    if ($opts.VisualFx) {
-        $vePath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'
-        $wmPath = 'HKCU:\Control Panel\Desktop\WindowMetrics'
-        $dtPath = 'HKCU:\Control Panel\Desktop'
-        $pzPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
-        $state.visualFx = @{
-            vfx          = Get-RegValue $vePath 'VisualFXSetting'
-            minAnimate   = Get-RegValue $wmPath 'MinAnimate'
-            dragFull     = Get-RegValue $dtPath 'DragFullWindows'
-            transparency = Get-RegValue $pzPath 'EnableTransparency'
-        }
-        if (-not (Test-Path $vePath)) { New-Item -Path $vePath -Force | Out-Null }
-        try {
-            Set-ItemProperty -Path $vePath -Name 'VisualFXSetting' -Value 2 -Type DWord -Force
-            Set-ItemProperty -Path $wmPath -Name 'MinAnimate' -Value '0' -Type String -Force
-            Set-ItemProperty -Path $dtPath -Name 'DragFullWindows' -Value '0' -Type String -Force
-            if (Test-Path $pzPath) { Set-ItemProperty -Path $pzPath -Name 'EnableTransparency' -Value 0 -Type DWord -Force }
-            Write-GBLog "Visual effects -> best performance (animations/transparency off)"
-        } catch { Write-GBLog "  (visual-effects tweak skipped)" }
-    }
-
-    # --- Free RAM: trim every background working set (Extreme) ---
-    if ($opts.TrimRam) {
-        $beforeFree = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory
-        $trimmed = 0
-        foreach ($p in Get-Process) {
-            if ($p.Id -eq $PID) { continue }
-            if (Test-KeepProcess $p.ProcessName $opts) { continue }
-            try { if ([GBNative]::EmptyWorkingSet($p.Handle)) { $trimmed++ } } catch { }
-        }
-        Start-Sleep -Milliseconds 300
-        $afterFree = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory
-        $freedMB = [math]::Round(($afterFree - $beforeFree) / 1024)
-        Write-GBLog "Trimmed $trimmed process(es), freed ~${freedMB} MB RAM"
-    }
-
-    # --- Restart Explorer last (frees its memory + applies visual settings) ---
-    if ($opts.VisualFx) {
-        try {
-            Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
-            Write-GBLog "Explorer restarted (memory freed)"
-        } catch { }
-    }
-
-    $state | ConvertTo-Json -Depth 6 | Set-Content -Path $Script:StateFile -Encoding UTF8
+    $state.phase = 'active'
+    Save-GBState $state
     Write-GBLog "=== BOOST ON ($($opts.Tier)) ==="
 }
 
 # ============================================================================
-# DISABLE  -  restore everything
+# DISABLE  -  restore tracked state
 # ============================================================================
 function Disable-GameBoost {
     if (-not (Test-Path $Script:StateFile)) {
         Write-GBLog "No saved state - nothing to restore."
-        return
+        return $true
     }
     $state = Get-Content -Path $Script:StateFile -Raw | ConvertFrom-Json
+    $restoreOk = $true
 
     # --- Power plan ---
     if ($state.prevPowerScheme) {
         powercfg /setactive $state.prevPowerScheme 2>$null
-        Write-GBLog "Power plan restored"
+        if ((Get-ActiveSchemeGuid) -ieq [string]$state.prevPowerScheme) {
+            Write-GBLog "Power plan restored"
+        } else {
+            $restoreOk = $false
+            Write-GBLog "  (power plan restore needs another try)"
+        }
+    }
+    if ($state.powerPlanCreated -and (Test-GBPowerSchemeExists ([string]$state.powerPlanCreated))) {
+        try {
+            powercfg /delete $state.powerPlanCreated 2>$null | Out-Null
+            if (Test-GBPowerSchemeExists ([string]$state.powerPlanCreated)) { throw 'power plan still exists' }
+            Write-GBLog "Temporary GameBoost power plan removed"
+        } catch {
+            $restoreOk = $false
+            Write-GBLog "  (temporary power plan removal needs another try)"
+        }
     }
 
     # --- Services ---
     if ($state.services) {
         $started = 0
+        $startedNames = @{}
         foreach ($s in $state.services) {
-            if ($s.wasRunning) {
-                try { Start-Service -Name $s.name -ErrorAction Stop; $started++ } catch { }
+            $stopWasAttempted = (-not (Test-GBStateProperty $s 'stopAttempted')) -or [bool]$s.stopAttempted
+            if ($s.wasRunning -and $stopWasAttempted -and -not $startedNames.ContainsKey([string]$s.name)) {
+                $serviceName = [string]$s.name
+                try {
+                    $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+                    if ($service -and $service.Status -ne 'Running') { Start-Service -Name $serviceName -ErrorAction Stop }
+                    $startedNames[[string]$s.name] = $true
+                    $started++
+                } catch {
+                    $restoreOk = $false
+                    Write-GBLog "  (could not restart $serviceName; OFF can retry)"
+                }
+            }
+            if (-not $stopWasAttempted) { continue }
+            foreach ($d in @($s.dependents)) {
+                if (-not $d -or $startedNames.ContainsKey([string]$d)) { continue }
+                try {
+                    $dependent = Get-Service -Name $d -ErrorAction SilentlyContinue
+                    if ($dependent -and $dependent.Status -ne 'Running') { Start-Service -Name $d -ErrorAction Stop }
+                    $startedNames[[string]$d] = $true
+                    $started++
+                } catch {
+                    $restoreOk = $false
+                    Write-GBLog "  (could not restart $d; OFF can retry)"
+                }
             }
         }
         Write-GBLog "Restarted $started service(s)"
     }
 
-    # --- Game DVR ---
-    if ($state.gameDvr) {
-        $p1 = 'HKCU:\System\GameConfigStore'
-        $p2 = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR'
-        if ($null -eq $state.gameDvr.gcs) { Remove-ItemProperty -Path $p1 -Name 'GameDVR_Enabled' -ErrorAction SilentlyContinue }
-        else { Set-ItemProperty -Path $p1 -Name 'GameDVR_Enabled' -Value ([int]$state.gameDvr.gcs) -Type DWord -Force -ErrorAction SilentlyContinue }
-        if ($null -eq $state.gameDvr.dvr) { Remove-ItemProperty -Path $p2 -Name 'AppCaptureEnabled' -ErrorAction SilentlyContinue }
-        else { Set-ItemProperty -Path $p2 -Name 'AppCaptureEnabled' -Value ([int]$state.gameDvr.dvr) -Type DWord -Force -ErrorAction SilentlyContinue }
-        Write-GBLog "Game DVR setting restored"
+    if (-not [bool](Restore-GBRegistry $state)) { $restoreOk = $false }
+    if (-not [bool](Restore-GBPriorities $state)) { $restoreOk = $false }
+    if (-not [bool](Restore-GBClosedApps $state)) { $restoreOk = $false }
+
+    if ($restoreOk) {
+        Remove-Item -Path $Script:StateFile -Force -ErrorAction SilentlyContinue
+        Write-GBLog "=== BOOST OFF - tracked settings restored ==="
+        return $true
     }
 
-    # --- Network ---
-    if ($state.network) {
-        if ($null -eq $state.network.sysResp) { Remove-ItemProperty -Path $Script:MultimediaProfile -Name 'SystemResponsiveness' -ErrorAction SilentlyContinue }
-        else { Set-ItemProperty -Path $Script:MultimediaProfile -Name 'SystemResponsiveness' -Value ([int64]$state.network.sysResp) -Type DWord -Force -ErrorAction SilentlyContinue }
-        if ($null -eq $state.network.netThrottle) { Remove-ItemProperty -Path $Script:MultimediaProfile -Name 'NetworkThrottlingIndex' -ErrorAction SilentlyContinue }
-        else { Set-ItemProperty -Path $Script:MultimediaProfile -Name 'NetworkThrottlingIndex' -Value ([int64]$state.network.netThrottle) -Type DWord -Force -ErrorAction SilentlyContinue }
-        Write-GBLog "Network settings restored"
-    }
-
-    # --- Visual effects ---
-    if ($state.visualFx) {
-        $vePath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'
-        $wmPath = 'HKCU:\Control Panel\Desktop\WindowMetrics'
-        $dtPath = 'HKCU:\Control Panel\Desktop'
-        $pzPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
-        if ($null -ne $state.visualFx.vfx) { Set-ItemProperty -Path $vePath -Name 'VisualFXSetting' -Value ([int]$state.visualFx.vfx) -Type DWord -Force -ErrorAction SilentlyContinue }
-        if ($null -ne $state.visualFx.minAnimate) { Set-ItemProperty -Path $wmPath -Name 'MinAnimate' -Value ([string]$state.visualFx.minAnimate) -Type String -Force -ErrorAction SilentlyContinue }
-        if ($null -ne $state.visualFx.dragFull) { Set-ItemProperty -Path $dtPath -Name 'DragFullWindows' -Value ([string]$state.visualFx.dragFull) -Type String -Force -ErrorAction SilentlyContinue }
-        if ($null -ne $state.visualFx.transparency) { Set-ItemProperty -Path $pzPath -Name 'EnableTransparency' -Value ([int]$state.visualFx.transparency) -Type DWord -Force -ErrorAction SilentlyContinue }
-        Write-GBLog "Visual effects restored"
-    }
-
-    # --- Reset all priorities in our session to Normal ---
-    try {
-        $mySession = (Get-Process -Id $PID).SessionId
-        foreach ($p in Get-Process) {
-            if ($p.SessionId -ne $mySession) { continue }
-            try { $p.PriorityClass = 'Normal' } catch { }
-        }
-    } catch { }
-
-    # --- Restart Explorer if we had stripped visuals (reapply restored look) ---
-    if ($state.visualFx) {
-        try { Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue } catch { }
-    }
-
-    Remove-Item -Path $Script:StateFile -Force -ErrorAction SilentlyContinue
-    Write-GBLog "=== BOOST OFF - everything restored ==="
+    Write-GBLog "Restore is incomplete. The recovery state was kept; flip OFF again to retry."
+    return $false
 }
 
 # ============================================================================
@@ -589,7 +957,7 @@ function Disable-GameBoost {
 [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="GameBoost" Height="864" Width="470"
+        Title="GameBoost" Height="884" Width="470"
         WindowStartupLocation="CenterScreen" Background="#0E1117" ResizeMode="CanMinimize">
   <Window.Resources>
     <Style TargetType="Button">
@@ -629,7 +997,7 @@ function Disable-GameBoost {
       <TextBlock Text="BOOST" Foreground="#3DDC84" FontSize="26" FontWeight="Bold"/>
     </StackPanel>
     <TextBlock Grid.Row="0" HorizontalAlignment="Right" VerticalAlignment="Bottom"
-               Text="reversible · admin" Foreground="#5A6472" FontSize="11"/>
+               Text="reversible - admin" Foreground="#5A6472" FontSize="11"/>
 
     <!-- Tier pills -->
     <Grid Grid.Row="1" Margin="0,14,0,4">
@@ -647,50 +1015,72 @@ function Disable-GameBoost {
     </Grid>
 
     <Border Grid.Row="2" Background="#161B22" CornerRadius="6" Padding="10,8" Margin="0,2,0,6">
-      <TextBlock Name="TierDesc" Foreground="#8B949E" FontSize="11.5" TextWrapping="Wrap" Height="50"/>
+      <TextBlock Name="TierDesc" Foreground="#8B949E" FontSize="11.5" TextWrapping="Wrap" Height="66"/>
     </Border>
 
     <!-- THE LIGHT SWITCH -->
-    <Border Grid.Row="3" Name="SwitchPlate" Width="150" Height="236" Margin="0,6,0,4"
-            CornerRadius="18" Background="#161B22" BorderBrush="#30363D" BorderThickness="2"
+    <Border Grid.Row="3" Name="SwitchPlate" Width="166" Height="252" Margin="0,6,0,12"
+            CornerRadius="14" Background="#E9E0D1" BorderBrush="#B8AA91" BorderThickness="2"
             Cursor="Hand" HorizontalAlignment="Center">
-      <Grid>
+      <Canvas Width="166" Height="252" ClipToBounds="False">
+        <Canvas.Background>
+          <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+            <GradientStop Color="#FFF8EA" Offset="0"/>
+            <GradientStop Color="#E7D8BF" Offset="1"/>
+          </LinearGradientBrush>
+        </Canvas.Background>
         <!-- mounting screws -->
-        <Ellipse Width="9" Height="9" Fill="#0B0E13" Stroke="#2A2F37" StrokeThickness="1"
-                 VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,9,0,0"/>
-        <Ellipse Width="9" Height="9" Fill="#0B0E13" Stroke="#2A2F37" StrokeThickness="1"
-                 VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="0,0,9,0"/>
+        <Ellipse Canvas.Left="76.5" Canvas.Top="14" Width="13" Height="13" Fill="#D3C4A8"
+                 Stroke="#9B8C72" StrokeThickness="1"/>
+        <Rectangle Canvas.Left="79" Canvas.Top="20" Width="8" Height="1.4" Fill="#8B7C64"
+                   RenderTransformOrigin="0.5,0.5">
+          <Rectangle.RenderTransform><RotateTransform Angle="-18"/></Rectangle.RenderTransform>
+        </Rectangle>
+        <Ellipse Canvas.Left="76.5" Canvas.Top="225" Width="13" Height="13" Fill="#D3C4A8"
+                 Stroke="#9B8C72" StrokeThickness="1"/>
+        <Rectangle Canvas.Left="79" Canvas.Top="231" Width="8" Height="1.4" Fill="#8B7C64"
+                   RenderTransformOrigin="0.5,0.5">
+          <Rectangle.RenderTransform><RotateTransform Angle="16"/></Rectangle.RenderTransform>
+        </Rectangle>
         <!-- engraved ON / OFF -->
-        <TextBlock Name="LblOn"  Text="ON"  VerticalAlignment="Top"    HorizontalAlignment="Center"
-                   Margin="0,24,0,0" Foreground="#3A4250" FontWeight="Bold" FontSize="12"/>
-        <TextBlock Name="LblOff" Text="OFF" VerticalAlignment="Bottom" HorizontalAlignment="Center"
-                   Margin="0,0,0,22" Foreground="#7D8694" FontWeight="Bold" FontSize="12"/>
-        <!-- status LED -->
-        <Ellipse Name="Led" Width="13" Height="13" VerticalAlignment="Top" HorizontalAlignment="Center"
-                 Margin="0,44,0,0" Fill="#2A2F37"/>
-        <!-- lever zone (2 rows: top=ON, bottom=OFF) -->
-        <Grid Margin="26,66,26,20">
-          <Grid.RowDefinitions>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="*"/>
-          </Grid.RowDefinitions>
-          <Border Name="Lever" Grid.Row="1" CornerRadius="12" Background="#3A4250">
-            <Border CornerRadius="12">
-              <Border.Background>
-                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                  <GradientStop Color="#40FFFFFF" Offset="0"/>
-                  <GradientStop Color="#00FFFFFF" Offset="0.45"/>
-                  <GradientStop Color="#33000000" Offset="1"/>
-                </LinearGradientBrush>
-              </Border.Background>
-              <TextBlock Name="LeverText" Text="OFF" VerticalAlignment="Center" HorizontalAlignment="Center"
-                         Foreground="#0E1117" FontWeight="Bold" FontSize="15"/>
-            </Border>
-          </Border>
-        </Grid>
-      </Grid>
+        <TextBlock Name="LblOn" Canvas.Left="71" Canvas.Top="39" Text="ON"
+                   Foreground="#9A8D77" FontWeight="Bold" FontSize="12"/>
+        <TextBlock Name="LblOff" Canvas.Left="69" Canvas.Top="202" Text="OFF"
+                   Foreground="#766B59" FontWeight="Bold" FontSize="12"/>
+        <!-- small pilot light keeps the tier color visible without making the switch look digital -->
+        <Ellipse Name="Led" Canvas.Left="121" Canvas.Top="43" Width="10" Height="10"
+                 Fill="#AFA187" Stroke="#8B7C64" StrokeThickness="1"/>
+
+        <Border Canvas.Left="44" Canvas.Top="62" Width="78" Height="142" CornerRadius="10"
+                Background="#C8B89B" BorderBrush="#9D8D72" BorderThickness="1">
+          <Border.Effect>
+            <DropShadowEffect Color="#6A5D49" BlurRadius="8" ShadowDepth="2" Opacity="0.28"/>
+          </Border.Effect>
+        </Border>
+
+        <Border Name="Lever" Canvas.Left="57" Canvas.Top="82" Width="52" Height="112"
+                CornerRadius="6" Background="#F8F0E2" BorderBrush="#B7A78A"
+                BorderThickness="1.2">
+          <Border.Effect>
+            <DropShadowEffect Color="#4D4030" BlurRadius="11" ShadowDepth="4" Opacity="0.45"/>
+          </Border.Effect>
+          <Grid>
+            <Grid.Background>
+              <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Color="#FFFDF7" Offset="0"/>
+                <GradientStop Color="#E8D8BC" Offset="1"/>
+              </LinearGradientBrush>
+            </Grid.Background>
+            <Rectangle Width="31" Height="2" RadiusX="1" RadiusY="1" Fill="#CDBD9E"
+                       HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,21,0,0"/>
+            <Rectangle Width="31" Height="2" RadiusX="1" RadiusY="1" Fill="#D7C8AD"
+                       HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,21"/>
+            <TextBlock Name="LeverText" Text="" Visibility="Collapsed"/>
+          </Grid>
+        </Border>
+      </Canvas>
     </Border>
-    <TextBlock Grid.Row="3" VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="0,0,0,-2"
+    <TextBlock Grid.Row="3" VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="0,0,0,0"
                Text="flip the switch" Foreground="#5A6472" FontSize="10"/>
 
     <!-- Discord keep box -->
@@ -728,7 +1118,7 @@ function Disable-GameBoost {
           <StackPanel Grid.Column="0" VerticalAlignment="Center">
             <TextBlock Text="Deep scan" Foreground="#E6E6E6" FontWeight="Bold" FontSize="13"/>
             <TextBlock Name="ScanInfo" Foreground="#8B949E" FontSize="10.5" TextWrapping="Wrap"
-                       Text="Find idle apps eating CPU/RAM and pick which to close."/>
+                       Text="Measure background CPU/disk activity and pick which apps to close."/>
           </StackPanel>
           <Button Name="ScanBtn" Grid.Column="1" Width="92" Height="34" Margin="8,0,0,0"
                   Background="#2D7D46" Foreground="White" FontWeight="Bold" Content="Scan now"/>
@@ -784,19 +1174,30 @@ $Script:Tier        = 'High'
 $Script:KeepDiscord = $true
 $Script:Busy        = $false
 $Script:ScanKill    = @()
+$Script:TargetPath  = ''
 $Script:IsOn        = Test-Path $Script:StateFile
 
 $Script:TierHex = @{ Normal = '#2EA043'; High = '#D29922'; Extreme = '#DA3633' }
 
 $TierInfo = @{
-    Normal  = 'Light touch. High Performance power plan, stops a few telemetry/search services, disables Game DVR, raises your game priority. Closes nothing.'
-    High    = 'Stops the full background-service list and closes bloat apps (OneDrive, Teams, Spotify, Dropbox...). Recommended for most.'
-    Extreme = 'MAXIMUM. Ultimate Performance plan, extended service shutdown, frees RAM, lowers every other app''s priority, strips visual effects, network tweaks, restarts Explorer, and closes heavy apps incl. web browsers. Built for weak PCs.'
+    Normal  = 'Stable FPS basics: Game Mode on, capture off, and a safe game priority boost. Closes and stops nothing.'
+    High    = 'Recommended. Adds narrow AC performance tuning, pauses indexing/capture services, and closes common background apps.'
+    Extreme = 'For CPU-limited PCs. Adds update-download cleanup and closes browsers, while avoiding RAM trimming and dangerous global priority tricks.'
 }
 
 # Color / brush helpers (hex -> WPF objects)
 function New-Color([string]$hex) { return [Windows.Media.Color][Windows.Media.ColorConverter]::ConvertFromString($hex) }
 function New-Brush([string]$hex) { return New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color][Windows.Media.ColorConverter]::ConvertFromString($hex)) }
+
+function Set-SwitchPose([bool]$on) {
+    if ($on) {
+        [Windows.Controls.Canvas]::SetTop($Lever, 62)
+    } else {
+        [Windows.Controls.Canvas]::SetTop($Lever, 82)
+    }
+    [Windows.Controls.Canvas]::SetLeft($Lever, 57)
+    $Lever.RenderTransform = $null
+}
 
 function Update-TierUI {
     $TierNormal.Background  = New-Brush '#21262D'
@@ -824,32 +1225,51 @@ function Update-SwitchUI {
 
     if ($Script:IsOn) {
         $hex = $Script:TierHex[$Script:Tier]
-        [Windows.Controls.Grid]::SetRow($Lever, 0)
-        $Lever.Background     = New-Brush $hex
-        $LeverText.Text       = 'ON'
+        Set-SwitchPose $true
+        $Lever.Background     = New-Brush '#FFF7E8'
+        $LeverText.Text       = ''
         $Led.Fill             = New-Brush $hex
         $glow = New-Object Windows.Media.Effects.DropShadowEffect
         $glow.Color = New-Color $hex; $glow.BlurRadius = 22; $glow.ShadowDepth = 0; $glow.Opacity = 1
         $Led.Effect           = $glow
-        $SwitchPlate.BorderBrush = New-Brush $hex
+        $SwitchPlate.BorderBrush = New-Brush '#B8AA91'
         $LblOn.Foreground     = New-Brush $hex
-        $LblOff.Foreground    = New-Brush '#3A4250'
+        $LblOff.Foreground    = New-Brush '#9A8D77'
         $StatusLine.Text      = "Boosted ($($Script:Tier)). Your PC is focused on the game."
     } else {
-        [Windows.Controls.Grid]::SetRow($Lever, 1)
-        $Lever.Background     = New-Brush '#3A4250'
-        $LeverText.Text       = 'OFF'
-        $Led.Fill             = New-Brush '#2A2F37'
+        Set-SwitchPose $false
+        $Lever.Background     = New-Brush '#F8F0E2'
+        $LeverText.Text       = ''
+        $Led.Fill             = New-Brush '#AFA187'
         $Led.Effect           = $null
-        $SwitchPlate.BorderBrush = New-Brush '#30363D'
-        $LblOn.Foreground     = New-Brush '#3A4250'
-        $LblOff.Foreground    = New-Brush '#7D8694'
+        $SwitchPlate.BorderBrush = New-Brush '#B8AA91'
+        $LblOn.Foreground     = New-Brush '#9A8D77'
+        $LblOff.Foreground    = New-Brush '#6E624F'
         $StatusLine.Text      = "Idle. Pick a tier, then flip the switch."
     }
 }
 
-# Modal Deep Scan review dialog. Returns an array of process names the user
-# chose to close, or $null if they cancelled.
+$Script:WatcherBoosted = @{}
+function Apply-GBTargetPriorityWatcher {
+    if (-not $Script:IsOn) { return }
+    if (-not (Test-Path $Script:StateFile)) { return }
+    try {
+        $state = Get-Content -Path $Script:StateFile -Raw | ConvertFrom-Json
+        $target = [string]$state.target
+        if (-not $target) { return }
+        foreach ($p in (Get-Process -Name $target -ErrorAction SilentlyContinue)) {
+            $key = "$($p.Id)|$(Get-GBStartIso $p)"
+            if ($Script:WatcherBoosted.ContainsKey($key)) { continue }
+            if (Set-GBProcessPriority $state $p 'AboveNormal') {
+                $Script:WatcherBoosted[$key] = $true
+                Write-GBLog "Watcher: game '$target' priority -> AboveNormal"
+            }
+        }
+    } catch { }
+}
+
+# Modal Deep Scan review dialog. Returns a confirmed result object so choosing
+# zero apps is distinct from cancelling the dialog.
 function Show-ScanDialog($scanOpts, $owner) {
     $candidates = Get-ScanCandidates $scanOpts
 
@@ -921,33 +1341,36 @@ function Show-ScanDialog($scanOpts, $owner) {
         $UseBtn.Content = 'Close'
     } else {
         $preCount = @($candidates | Where-Object { $_.Preselect }).Count
-        $ScanHdr.Text = "Found $($candidates.Count) app(s). The $preCount using the most CPU/RAM are pre-checked. Untick anything you want to keep - checked apps close when you flip the switch.$warn"
+        $ScanHdr.Text = "Found $($candidates.Count) app(s). The $preCount with sustained CPU/disk activity are pre-checked; RAM alone never selects an app. Untick anything you want to keep.$warn"
         foreach ($c in $candidates) {
             $cb = New-Object Windows.Controls.CheckBox
             $cb.Foreground = New-Brush '#C9D1D9'
             $cb.Margin     = '2,4,2,4'
-            $cb.Tag        = $c.Name
+            $cb.Tag        = [pscustomobject]@{ Name = [string]$c.Name; Path = [string]$c.Path }
             $cb.IsChecked  = [bool]$c.Preselect
             $extra = if ($c.Count -gt 1) { "  (x$($c.Count))" } else { '' }
-            $cb.Content = ('{0}{1}   -   {2} MB   -   {3}% CPU' -f $c.Name, $extra, $c.RamMB, $c.CpuPct)
+            if ($c.HasWindow) { $extra += '  [open window]' }
+            $cb.Content = ('{0}{1}   -   {2} MB   -   {3}% CPU   -   {4} MB/s disk' -f $c.Name, $extra, $c.RamMB, $c.CpuPct, $c.DiskMBps)
             $ScanList.Children.Add($cb) | Out-Null
             $checks += $cb
         }
     }
 
-    $result = @{ names = $null }
+    $result = @{ confirmed = $false; names = @() }
     $SelAll.Add_Click({  foreach ($c in $checks) { $c.IsChecked = $true } })
     $SelNone.Add_Click({ foreach ($c in $checks) { $c.IsChecked = $false } })
     $UseBtn.Add_Click({
         $sel = @()
-        foreach ($c in $checks) { if ($c.IsChecked) { $sel += ([string]$c.Tag).ToLowerInvariant() } }
+        foreach ($c in $checks) { if ($c.IsChecked) { $sel += $c.Tag } }
         $result.names = $sel
+        $result.confirmed = $true
         $dlg.DialogResult = $true
         $dlg.Close()
     }.GetNewClosure())
 
     $null = $dlg.ShowDialog()
-    return $result.names
+    if (-not $result.confirmed) { return $null }
+    return [pscustomobject]@{ Confirmed = $true; Names = @($result.names) }
 }
 
 # --- Deep scan button ---
@@ -971,6 +1394,8 @@ $ScanBtn.Add_Click({
                 if (($Script:ScanProtect -notcontains $nl) -and ($Script:ProtectNames -notcontains $nl)) {
                     $target = $fg.ProcessName
                     $TxtTarget.Text = $target
+                    try { $Script:TargetPath = [string]$fg.Path } catch { $Script:TargetPath = '' }
+                    if (-not $Script:TargetPath) { $Script:TargetPath = Get-GBProcessPathByName $target }
                     Write-GBLog "Game set to '$target' (excluded from scan)"
                 }
             }
@@ -979,8 +1404,9 @@ $ScanBtn.Add_Click({
         $ScanInfo.Text = 'Scanning processes...'
         $ScanBtn.Dispatcher.Invoke([action]{}, 'Render')
         $scanOpts = @{ Target = $target; KeepDiscord = $Script:KeepDiscord }
-        $names = Show-ScanDialog $scanOpts $win
-        if ($null -ne $names) {
+        $scanResult = Show-ScanDialog $scanOpts $win
+        if ($null -ne $scanResult) {
+            $names = @($scanResult.Names)
             $Script:ScanKill = $names
             if ($names.Count -gt 0) {
                 $ScanInfo.Text = "$($names.Count) app(s) queued - they close when you flip the switch."
@@ -989,7 +1415,7 @@ $ScanBtn.Add_Click({
                 $ScanInfo.Text = "Nothing queued. Scan again any time."
             }
         } else {
-            $ScanInfo.Text = "Find idle apps eating CPU/RAM and pick which to close."
+            $ScanInfo.Text = "Measure background CPU/disk activity and pick which apps to close."
         }
     } catch {
         Write-GBLog "Scan error: $($_.Exception.Message)"
@@ -1016,27 +1442,46 @@ $DiscordBtn.Add_Click({
     Update-DiscordUI
 })
 
+$TxtTarget.Add_TextChanged({
+    if (-not $Script:IsOn) { $Script:TargetPath = '' }
+})
+
 # --- Flip the switch ---
 $flip = {
     if ($Script:Busy) { return }
+    if (-not $Script:IsOn -and (Test-Path $Script:StateFile)) {
+        $Script:IsOn = $true
+        Write-GBLog "Recovery state found. Flip OFF to restore it before starting another boost."
+        Update-SwitchUI
+        return
+    }
     $Script:Busy = $true
+    $wasOn = $Script:IsOn
     try {
         if ($Script:IsOn) {
-            Disable-GameBoost
-            $Script:IsOn = $false
+            $Script:IsOn = -not [bool](Disable-GameBoost)
         } else {
             $target = ($TxtTarget.Text).Trim() -replace '\.exe$',''
-            $opts = Get-TierOptions $Script:Tier $target $Script:KeepDiscord
+            if ($target -and -not $Script:TargetPath) { $Script:TargetPath = Get-GBProcessPathByName $target }
+            $opts = Get-TierOptions $Script:Tier $target $Script:KeepDiscord $Script:TargetPath
             $opts.ScanKill = $Script:ScanKill
             if ($Script:KeepDiscord) { Write-GBLog "Discord protected (won't be closed or slowed)" }
-            if ($Script:Tier -eq 'Extreme') { Write-GBLog "Applying EXTREME - screen may flicker as Explorer restarts..." }
+            if ($Script:Tier -eq 'Extreme') { Write-GBLog "Applying EXTREME - aggressive cleanup without RAM trimming or Explorer restart..." }
             Enable-GameBoost $opts
             $Script:IsOn = $true
         }
-        Update-SwitchUI
     } catch {
         Write-GBLog "ERROR: $($_.Exception.Message)"
+        if (-not $wasOn -and (Test-Path $Script:StateFile)) {
+            Write-GBLog "Enable was interrupted - rolling back recorded changes now..."
+            $Script:IsOn = $true
+            try { $Script:IsOn = -not [bool](Disable-GameBoost) }
+            catch { Write-GBLog "Automatic rollback failed; recovery state was kept for OFF." }
+        } else {
+            $Script:IsOn = Test-Path $Script:StateFile
+        }
     } finally {
+        Update-SwitchUI
         $Script:Busy = $false
     }
 }
@@ -1055,7 +1500,13 @@ $DetectBtn.Add_Click({
     $p = Get-ForegroundProcess
     if ($p -and $p.Id -ne $PID) {
         $TxtTarget.Text = $p.ProcessName
-        Write-GBLog "Detected game: $($p.ProcessName)"
+        try { $Script:TargetPath = [string]$p.Path } catch { $Script:TargetPath = '' }
+        if (-not $Script:TargetPath) { $Script:TargetPath = Get-GBProcessPathByName $p.ProcessName }
+        if ($Script:TargetPath) {
+            Write-GBLog "Detected game: $($p.ProcessName) ($([IO.Path]::GetFileName($Script:TargetPath)))"
+        } else {
+            Write-GBLog "Detected game: $($p.ProcessName)"
+        }
     } else {
         Write-GBLog "Could not detect a game window."
     }
@@ -1063,11 +1514,18 @@ $DetectBtn.Add_Click({
     $DetectBtn.IsEnabled = $true
 })
 
+$Script:PriorityWatcher = New-Object Windows.Threading.DispatcherTimer
+$Script:PriorityWatcher.Interval = [TimeSpan]::FromSeconds(5)
+$Script:PriorityWatcher.Add_Tick({ Apply-GBTargetPriorityWatcher })
+$Script:PriorityWatcher.Start()
+
 # If a boost is already active, reflect its tier + Discord choice
 if ($Script:IsOn) {
     try {
         $saved = Get-Content -Path $Script:StateFile -Raw | ConvertFrom-Json
         if ($saved.tier) { $Script:Tier = [string]$saved.tier }
+        if ($saved.target) { $TxtTarget.Text = [string]$saved.target }
+        if ($saved.targetPath) { $Script:TargetPath = [string]$saved.targetPath }
         if ($null -ne $saved.opts -and $null -ne $saved.opts.KeepDiscord) { $Script:KeepDiscord = [bool]$saved.opts.KeepDiscord }
     } catch { }
 }
@@ -1076,9 +1534,18 @@ Update-TierUI
 Update-DiscordUI
 Update-SwitchUI
 if ($Script:IsOn) {
-    Write-GBLog "Active $($Script:Tier) boost from earlier. Flip the switch to restore."
+    if ($saved.phase -eq 'enabling') {
+        Write-GBLog "Interrupted enable recovered. Flip the switch OFF to roll back recorded changes."
+    } else {
+        Write-GBLog "Active $($Script:Tier) boost from earlier. Flip the switch to restore."
+    }
 } else {
     Write-GBLog "Ready. Pick a tier and flip the switch before you play."
 }
+
+$win.Add_Closed({
+    try { $Script:InstanceMutex.ReleaseMutex() } catch { }
+    try { $Script:InstanceMutex.Dispose() } catch { }
+})
 
 $win.ShowDialog() | Out-Null

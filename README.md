@@ -1,123 +1,128 @@
 # GameBoost
 
-A one-switch performance booster for Windows with three tiers. Pick a tier,
-flip the switch **ON** before you play, and **OFF** when you're done — it puts
-everything back exactly how it was.
+GameBoost is a reversible Windows gaming performance helper. Pick a tier, flip
+the switch ON before playing, and flip it OFF when finished. It focuses on
+reducing real CPU, disk, and network contention instead of using RAM cleaners or
+registry folklore that can make frame times worse.
+
+No utility can manufacture GPU performance. GameBoost is most useful when a
+game is CPU-limited or Windows and background apps are competing for resources.
+If a game is already GPU-bound and the PC is otherwise idle, average FPS may not
+change. The more realistic win in that case is fewer background spikes.
 
 ## How to use
 
 1. Double-click **`GameBoost.bat`**.
-2. Click **Yes** on the Windows admin (UAC) prompt.
-3. Pick a tier: **NORMAL**, **HIGH**, or **EXTREME**.
-4. Leave **Keep Discord running** ON if you use Discord to talk (it's on by
-   default) — Discord won't be closed or slowed.
-5. (Optional) Click **Detect (3s)** and alt-tab to your game, or type the
-   game's `.exe` name, so GameBoost knows what to prioritize.
-6. (Optional) Click **Scan now** to find and queue extra resource-hogging apps
-   to close — see Deep Scan below.
-7. **Flip the light switch** — click it to slide the lever up. The LED lights
-   up in the tier's color and the boost runs. Play.
-8. When done, reopen GameBoost and flip the switch back down to turn it **OFF**.
+2. Accept the Windows administrator prompt.
+3. Pick **NORMAL**, **HIGH**, or **EXTREME**.
+4. Leave **Keep Discord running** on if you use voice chat.
+5. Click **Detect (3s)** and focus the running game, or type its process name.
+6. Optionally run **Deep scan** and review extra apps to close.
+7. Flip the light switch up to turn the boost ON.
+8. Leave GameBoost open or minimized if the named game has not started yet; its
+   low-frequency watcher will apply the priority after the process appears.
+9. Flip the switch down when finished. OFF restores the tracked state.
 
-> The boost stays active even if you close the window. Reopen GameBoost and the
-> switch shows it's still ON (in the right tier) so you can flip it OFF.
+If no game is entered, service and app cleanup still works, but no process
+priority is changed. GameBoost deliberately does not poll GPU counters during
+play because that monitoring can create the periodic work this tool is meant to
+remove.
 
-## Deep Scan — close what's actually running
+## What ON does
 
-Static lists only catch *known* bloat. **Deep Scan** catches whatever is
-running on your PC right now:
+All tiers:
 
-1. Click **Scan now**. (If you haven't set your game yet, it gives you 3
-   seconds to click your game window so it's captured and **never listed**.)
-2. It samples every process's live **CPU%** and **RAM**, throws out everything
-   essential, and shows you the non-essential resource users — biggest first.
-3. The heaviest ones (≥100 MB or ≥1% CPU) are **pre-checked**. Untick anything
-   you want to keep, or hit **Select all** to close everything non-essential.
-4. Click **Queue selected**. Those apps now close the moment you flip the switch.
+- Enables Game Mode and disables Game DVR background capture for the session.
+- Sets the selected game to **AboveNormal** priority. It deliberately avoids
+  High and Realtime priorities, which can starve audio, drivers, and Windows.
 
-What Deep Scan will **never** list or close (the "essential" set):
-- Windows core and shell (explorer, dwm, csrss, search, input, etc.)
-- Security (Defender) and audio / GPU drivers (NVIDIA, AMD, Realtek)
-- Anti-cheat (EasyAntiCheat, BattlEye, Vanguard, FACEIT)
-- **Game launchers** (Steam, Epic, Battle.net, EA, Ubisoft, Riot, GOG) — killing
-  these can close or break your game
-- **Your game** (when set/detected) and **Discord** (when the toggle is on)
+HIGH additionally:
 
-You review the list before anything is closed, so nothing critical or with
-unsaved work dies silently.
+- Clones the current power plan into a temporary copy and changes only two AC
+  processor settings: maximum state and documented energy-performance
+  preference. OEM thermal, battery, storage, PCIe, USB, Wi-Fi, boost-mode, and
+  minimum-processor policies remain untouched.
+- Temporarily stops active search indexing, telemetry, Game DVR capture, maps,
+  and error-reporting services.
+- Closes known background apps such as OneDrive, Teams, Spotify, Dropbox, Slack,
+  Zoom, Phone Link, Widgets, and Game Bar helpers.
 
-## The light switch + Discord toggle
+EXTREME additionally:
 
-The whole UI is a wall switch: **up = ON** (LED glows in your tier color),
-**down = OFF**. The tier you pick colors the switch — green (Normal), amber
-(High), red (Extreme).
+- Uses the performance end of the documented AC energy-performance preference.
+- Pauses Windows Update, BITS, and Delivery Optimization only when no Windows
+  servicing process is active.
+- Closes browsers, Adobe helpers, and other heavier background apps. Peripheral,
+  fan/profile, launcher, and GPU-driver utilities are left alone.
 
-The **Keep Discord running** box is on by default. When it's ON, Discord (and
-its voice helpers) are never closed by the bloat-killer and never slowed by the
-Extreme priority pass, so your voice chat stays smooth. Turn it OFF only if you
-want Extreme to close Discord too for maximum free RAM.
+Extreme is intentionally aggressive, but it still does not disable antivirus,
+kill Windows core processes, trim working sets, restart Explorer, force global
+priority changes, or apply speculative network tweaks.
 
-## The three tiers
+## Deep scan
 
-### 🟢 NORMAL — light touch
-For when you just need a small nudge. Nothing gets closed.
-- High Performance power plan
-- Stops a few junk services (telemetry, search indexer, SuperFetch, maps)
-- Disables Game DVR / background recording
-- Raises your game's CPU priority
+Deep scan samples current CPU, working memory, and disk I/O, then lists
+non-essential user-session processes. The game, Windows core, security, drivers,
+anti-cheat, launchers, Discord when protected, and capture/audio tools are
+excluded.
 
-### 🟡 HIGH — recommended for most
-Everything in Normal, plus:
-- Stops the **full** background-service list (print spooler, error reporting,
-  compatibility assistant, media sharing, etc.)
-- Closes background **bloat apps** (OneDrive, Teams, Spotify, Dropbox, Slack,
-  Zoom, Phone Link, Widgets...)
+Resource-heavy background processes are preselected. Apps with a visible window
+are labeled and are not preselected, reducing the chance of closing unsaved
+work. RAM size alone never preselects an app; selection requires measured CPU or
+disk activity. You still control the final selection.
 
-### 🔴 EXTREME — maximum, built for weak PCs
-Everything in High, plus the heavy hitters:
-- **Ultimate Performance** power plan (auto-created the first time)
-- **Extended service shutdown** — Windows Update, BITS, Delivery Optimization,
-  geolocation, biometrics, sensors, and more
-- **Frees RAM** — trims the working set of every background process and reports
-  roughly how many MB it gave back
-- **Lowers every other app's CPU priority** to BelowNormal so your game gets the
-  cores (anti-cheat, audio, and core UI are protected and never touched)
-- **Strips visual effects** — animations, transparency, window drag effects off
-- **Network latency tweaks** — disables network throttling, maxes system
-  responsiveness for games
-- **Restarts Explorer** to reclaim its memory (your taskbar will blink once)
-- **Closes heavy apps including web browsers** (Chrome, Edge, Firefox, Discord,
-  Office...)
+## Restoration
 
-> Extreme is aggressive on purpose. Your screen will flicker once when Explorer
-> restarts — that's normal. Turning the switch OFF reverses all of it.
+Before each change, GameBoost atomically updates
+`%LOCALAPPDATA%\GameBoost\state.json`. OFF uses that ledger to:
 
-## Is it safe?
+- Reactivate the exact previous power plan and remove the temporary copy.
+- Restart only services that were running before ON.
+- Restore only process priorities that GameBoost changed, matching both PID and
+  process start time.
+- Restore original registry values, removing values that did not exist before.
+- Preserve a registry value if Windows or the user changed it again while ON.
+- Relaunch apps that GameBoost closed when Windows exposes a valid executable
+  path.
 
-Yes — it's deliberately conservative under the hood:
-- **Never** touches critical Windows processes (it can't crash your PC).
-- **Never** disables your antivirus.
-- Game priority is set to **High**, never **Realtime** (which can freeze a PC).
-- Anti-cheat (EasyAntiCheat, BattlEye, Vanguard), audio, and core UI are on a
-  protect-list and are never de-prioritized.
-- Every change is **saved to disk and reversed** when you flip OFF.
-- A reboot also resets power plan, priorities, and services — always a clean
-  fallback.
+Visible apps receive a normal close request first; GameBoost does not force them
+closed if they refuse. Background helper processes may be force-closed. Relaunch
+can restore the application process, but no tool can reconstruct unsaved in-app
+state. Save work before using Extreme or manually selecting an app in Deep scan.
+
+If a meaningful restore action fails, GameBoost keeps the recovery file and
+leaves the switch ON so OFF can be tried again instead of discarding the state.
 
 ## Customizing
 
-Open `GameBoost.ps1` in any text editor and edit the lists near the top:
-- `$SvcLight` / `$SvcStandard` / `$SvcExtended` — services per tier
-  (remove `'Spooler'` if you print while gaming).
-- `$BloatStandard` / `$BloatExtended` — apps to close (add `'obs64'`, remove
-  the browsers, etc.).
-- `$ProtectNames` — processes Extreme will never de-prioritize (add your
-  anti-cheat or voice app if needed).
+The configuration lists are near the top of `GameBoost.ps1`:
 
-## Notes
+- `$Script:SvcLight`, `$Script:SvcStandard`, `$Script:SvcExtended`: services by
+  tier. Remove update services from Extreme if downloads must continue.
+- `$Script:BloatStandard`, `$Script:BloatExtended`: apps closed by tier.
+- `$Script:ProtectNames` and `$Script:ScanProtect`: processes that remain
+  untouched.
 
-- For the **priority boost**, the game should be running when you flip ON (or
-  detect it first). Launch the game afterward? Just flip OFF then ON again.
-- State is stored in `%LOCALAPPDATA%\GameBoost\state.json`.
-- **Extreme closes your browser** — save your tabs first. Don't use Extreme if
-  you're following a video guide in your browser while playing.
+## Technical choices
+
+Microsoft warns that High process priority can consume nearly all available CPU
+time, so GameBoost uses AboveNormal. Microsoft also documents that MMCSS High
+scheduling is intended for Pro Audio and that its GPU Priority and SFIO Priority
+values are not used, so GameBoost does not overwrite the Windows Games profile.
+The temporary plan uses documented processor energy-performance preference
+settings.
+
+References:
+
+- [Process priority classes](https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.processpriorityclass)
+- [Multimedia Class Scheduler Service](https://learn.microsoft.com/en-us/windows/win32/procthread/multimedia-class-scheduler-service)
+- [Processor energy-performance preference](https://learn.microsoft.com/en-us/windows-hardware/customize/power-settings/options-for-perf-state-engine-perfenergypreference)
+- [Processor power-management guidance](https://learn.microsoft.com/en-us/windows-hardware/customize/power-settings/configure-processor-power-management-options)
+- [Windows service configuration guidance](https://learn.microsoft.com/en-us/windows/iot/iot-enterprise/optimize/services)
+- [Microsoft Windows performance guidance](https://support.microsoft.com/en-us/windows/tips-to-improve-pc-performance-in-windows-b3b3ef5b-5953-fb6a-2528-4bbed82fba96)
+
+## License
+
+GameBoost is free and open source under the **MIT License**. Anyone may use,
+modify, distribute, or build on it as long as the license notice is retained.
+See [`LICENSE`](LICENSE) for the full terms.
